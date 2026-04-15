@@ -1,0 +1,36 @@
+{
+  "name": "goose_perception",
+  "version": "0.1.0",
+  "description": "Desktop screenshot → personal wiki daemon powered by Goose",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "goose_perception": "dist/main.js"
+  },
+  "files": [
+    "dist",
+    "scripts/postinstall.mjs"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "tsx src/main.ts",
+    "postinstall": "node scripts/postinstall.mjs",
+    "prepublishOnly": "tsc"
+  },
+  "dependencies": {
+    "@aaif/goose-acp": "^0.1.2",
+    "@agentclientprotocol/sdk": "^0.14.1"
+  },
+  "optionalDependencies": {
+    "@aaif/goose-binary-darwin-arm64": "*",
+    "@aaif/goose-binary-darwin-x64": "*",
+    "@aaif/goose-binary-linux-arm64": "*",
+    "@aaif/goose-binary-linux-x64": "*",
+    "@aaif/goose-binary-win32-x64": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
