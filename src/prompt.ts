@@ -1,4 +1,4 @@
-import { readFile, writeFile, access } from "node:fs/promises";
+import { readFile, writeFile, mkdir, access } from "node:fs/promises";
 import { join } from "node:path";
 import type { Screenshot } from "./screenshot.js";
 
@@ -162,6 +162,7 @@ Prefer appending to daily notes rather than rewriting them.
  * Returns true if the file was newly created.
  */
 export async function ensurePromptFiles(rootDir: string): Promise<boolean> {
+  await mkdir(rootDir, { recursive: true });
   let created = false;
   for (const [filename, content] of [[PROMPT_FILENAME, DEFAULT_PROMPT], [LINT_PROMPT_FILENAME, DEFAULT_LINT_PROMPT]]) {
     const path = join(rootDir, filename);

@@ -1,11 +1,11 @@
 {
-  "name": "goose_perception",
-  "version": "0.1.0",
+  "name": "goose-perception",
+  "version": "0.1.1",
   "description": "Desktop screenshot → personal wiki daemon powered by Goose",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "goose_perception": "dist/main.js"
+    "goose-perception": "dist/main.js"
   },
   "files": [
     "dist",
