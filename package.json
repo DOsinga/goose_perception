@@ -1,5 +1,5 @@
 {
-  "name": "goose-perception",
+  "name": "goose_perception",
   "version": "0.1.1",
   "description": "Desktop screenshot → personal wiki daemon powered by Goose",
   "license": "Apache-2.0",
