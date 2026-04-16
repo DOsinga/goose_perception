@@ -11,7 +11,7 @@ import type {
   ContentBlock,
 } from "@agentclientprotocol/sdk";
 import { ndJsonStream } from "@agentclientprotocol/sdk";
-import { GooseClient } from "@aaif/goose-acp";
+import { GooseClient } from "@aaif/goose-sdk";
 import type { Screenshot } from "./screenshot.js";
 import { loadSystemPrompt, loadLintPrompt, buildPromptBlocks } from "./prompt.js";
 import { getWikiSummary, getRecentLog } from "./wiki.js";
@@ -161,32 +161,21 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
     },
 
     async listProviders(): Promise<ProviderInfo[]> {
-      const result = await client.goose.GooseProvidersList({});
-      return result.providers.map((p: { id: string; label: string }) => ({
-        id: p.id,
-        label: p.label,
-      }));
+      const result = await client.goose.GooseProvidersDetails({});
+      return result.providers
+        .filter((p) => p.isConfigured)
+        .map((p) => ({
+          id: p.name,
+          label: p.displayName || p.name,
+        }));
     },
 
     async listModels(provider: string): Promise<{ models: ModelInfo[]; current: string }> {
-      // Create a throwaway session with the requested provider to get its model list
-      const session = await client.newSession({
-        cwd: config.wikiDir,
-        mcpServers: [],
-        _meta: { provider },
-      });
-
-      const models: ModelInfo[] = [];
-      let current = "";
-
-      if (session.models) {
-        current = session.models.currentModelId ?? "";
-        for (const m of session.models.availableModels ?? []) {
-          models.push({ id: m.modelId, name: m.name || m.modelId });
-        }
-      }
-
-      return { models, current };
+      const result = await client.goose.GooseProvidersModels({ providerName: provider });
+      return {
+        models: result.models.map((id) => ({ id, name: id })),
+        current: result.models[0] ?? "",
+      };
     },
 
     shutdown() {

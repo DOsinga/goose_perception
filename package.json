@@ -18,7 +18,7 @@
     "prepublishOnly": "tsc"
   },
   "dependencies": {
-    "@aaif/goose-acp": "^0.1.2",
+    "@aaif/goose-sdk": "^0.17.0",
     "@agentclientprotocol/sdk": "^0.14.1"
   },
   "optionalDependencies": {
