@@ -121,15 +121,20 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
   });
 
   const EXTRACT_PROMPT =
-    "Describe what's happening on this screen. Focus on what would be useful " +
-    "for a daily diary entry — what the user is working on, who they're " +
-    "communicating with, what they're reading or writing. Note anything " +
-    "interesting: notifications, messages, documents, URLs, error messages, " +
-    "names of people or projects.";
+    "Describe what's on this screen in 2-3 sentences. Only note concrete facts: " +
+    "which app is in front, what document/URL/file is open, any visible names " +
+    "of people or projects, any messages or notifications. Do not speculate " +
+    "about what the user is doing or feeling. Do not add headers or formatting.\n\n" +
+    "If the screen is essentially the same as your previous description, " +
+    "reply with exactly: NO CHANGES";
+
+  let lastExtraction = "";
 
   async function createSession(kind: "fast" | "smart"): Promise<string> {
     const provider = kind === "fast" ? config.fastProvider : config.smartProvider;
     const model = kind === "fast" ? config.fastModel : config.smartModel;
+
+    console.log(`  🔌 Creating ${kind} session: ${provider ?? "default"}/${model ?? "default"}`);
 
     const session = await client.newSession({
       cwd: config.wikiDir,
@@ -154,15 +159,24 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
 
       streamBuffer.length = 0;
 
+      const prompt = lastExtraction
+        ? `${EXTRACT_PROMPT}\n\nYour previous description was:\n${lastExtraction}`
+        : EXTRACT_PROMPT;
+
       await client.prompt({
         sessionId,
         prompt: [
-          { type: "text", text: EXTRACT_PROMPT },
+          { type: "text", text: prompt },
           { type: "image", data: screenshot.base64, mimeType: screenshot.mimeType },
         ] as ContentBlock[],
       });
 
-      return streamBuffer.join("");
+      const result = streamBuffer.join("").trim();
+      if (result.includes("NO CHANGES") || result.includes("NO REAL CHANGES")) {
+        return "";
+      }
+      lastExtraction = result;
+      return result;
     },
 
     async sendScreenshots(screenshots: Screenshot[]): Promise<string> {
@@ -281,6 +295,7 @@ function findServerBinary(): string | null {
 
   // Check well-known install locations before PATH (PATH may have stale versions)
   const wellKnown = [
+    "/Users/douwe/proj/goose/target/debug/goose",
     "/opt/homebrew/bin/goose",
     "/usr/local/bin/goose",
   ];

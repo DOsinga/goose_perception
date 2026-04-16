@@ -10,7 +10,7 @@ import { connectAgent, type AgentHandle } from "./agent.js";
 import { startBrowser, setBrowserAgent } from "./browser.js";
 import { ensurePromptFiles } from "./prompt.js";
 import { seedLintQueue } from "./lint.js";
-import { loadSettings, type Settings } from "./settings.js";
+import { loadSettings } from "./settings.js";
 
 const DEFAULT_INTERVAL_SECS = 5;
 const DEFAULT_BATCH_SIZE = 3;
@@ -75,7 +75,7 @@ function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*[a-zA-Z]|\x1b\]8;;[^\x1b]*\x1b\\/g, "");
 }
 
-function printBanner(config: Config, settings: Settings) {
+function printBanner(config: Config) {
   const url = `http://localhost:${BROWSER_PORT}`;
   const rows = process.stdout.rows ?? 24;
   const cols = process.stdout.columns ?? 80;
@@ -91,18 +91,9 @@ function printBanner(config: Config, settings: Settings) {
   const pad = Math.max(0, cols - stripAnsi(text).length);
   process.stdout.write(`\x1b[97;44m  goose perception  ${link}  ${config.wikiDir}${" ".repeat(pad)}\x1b[0m\n`);
 
-  // Config summary
-  const fast = settings.fastProvider && settings.fastModel
-    ? `${settings.fastProvider}/${settings.fastModel}`
-    : "default";
-  const smart = settings.smartProvider && settings.smartModel
-    ? `${settings.smartProvider}/${settings.smartModel}`
-    : "default";
-  console.log(`  ⚡ Fast: ${fast}  |  🧠 Smart: ${smart}  |  📷 Every ${config.intervalSecs}s`);
-
-  // Set scroll region below banner (lines 3+ onward)
-  process.stdout.write(`\x1b[3;${rows}r`);
-  process.stdout.write(`\x1b[3;1H`);
+  // Set scroll region below banner (line 2 onward)
+  process.stdout.write(`\x1b[2;${rows}r`);
+  process.stdout.write(`\x1b[2;1H`);
 }
 
 function restoreTerminal() {
@@ -203,8 +194,13 @@ async function extractLoop(config: Config, agent: AgentHandle, signal: AbortSign
           mimeType: "image/jpeg",
         });
 
-        await writeFile(txtPath, description, "utf-8");
-        console.log(`\n✅ Saved ${file.replace(".png", ".txt")}`);
+        if (description) {
+          await writeFile(txtPath, description, "utf-8");
+          console.log(`✅ ${file.replace(".png", ".txt")}`);
+        } else {
+          console.log(`⏭️  No changes`);
+          await unlink(pngPath);
+        }
         consecutiveErrors = 0;
       }
     } catch (err) {
@@ -273,7 +269,15 @@ async function main() {
     }
   }
 
-  printBanner(config, settings);
+  printBanner(config);
+
+  const fast = settings.fastProvider && settings.fastModel
+    ? `${settings.fastProvider}/${settings.fastModel}`
+    : "default";
+  const smart = settings.smartProvider && settings.smartModel
+    ? `${settings.smartProvider}/${settings.smartModel}`
+    : "default";
+  console.log(`⚡ Fast: ${fast}  |  🧠 Smart: ${smart}  |  📷 Every ${config.intervalSecs}s`);
 
   const abortController = new AbortController();
   const { signal } = abortController;
