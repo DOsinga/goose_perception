@@ -121,11 +121,14 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
   });
 
   const EXTRACT_PROMPT =
-    "Describe what's on this screen in 2-3 sentences. Only note concrete facts: " +
-    "which app is in front, what document/URL/file is open, any visible names " +
-    "of people or projects, any messages or notifications. Do not speculate " +
-    "about what the user is doing or feeling. Do not add headers or formatting.\n\n" +
-    "If the screen is essentially the same as your previous description, " +
+    "Transcribe all visible text on this screen. Group it by app or window, " +
+    "and attribute messages to the person who sent them. Include:\n" +
+    "- App/window name and any URL or file path visible\n" +
+    "- All readable text: messages, code, documents, notifications\n" +
+    "- For chat apps: who said what\n" +
+    "- Any error messages, toasts, or popups\n" +
+    "Skip UI chrome (menus, buttons) unless they convey information.\n\n" +
+    "If the screen is essentially the same as your previous transcription, " +
     "reply with exactly: NO CHANGES";
 
   let lastExtraction = "";
