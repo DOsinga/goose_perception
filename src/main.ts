@@ -36,6 +36,7 @@ interface Config {
   batchSize: number;
   rootDir: string;
   wikiDir: string;
+  screenshotsDir: string;
   inboxDir: string;
   processedDir: string;
   serverUrl?: string;
@@ -75,6 +76,7 @@ Options:
     batchSize: parseInt(values.batch!, 10),
     rootDir,
     wikiDir: join(rootDir, "wiki"),
+    screenshotsDir: join(rootDir, "screenshots"),
     inboxDir: join(rootDir, "inbox"),
     processedDir: join(rootDir, "processed"),
     serverUrl: values.server,
@@ -137,7 +139,8 @@ async function screenshotLoop(config: Config, signal: AbortSignal): Promise<void
           // Screen changed — emit the previous (stable state before the change)
           if (previousPng) {
             const filename = `screenshot-${Date.now()}.png`;
-            await rename(previousPng, join(config.inboxDir, filename));
+            await mkdir(config.screenshotsDir, { recursive: true });
+            await rename(previousPng, join(config.screenshotsDir, filename));
             console.log(`📸 Screen changed (${(diff * 100).toFixed(1)}% diff) — saved to inbox`);
           }
           // Current becomes the new base
@@ -172,7 +175,7 @@ async function extractLoop(config: Config, agent: AgentHandle, signal: AbortSign
 
   while (!signal.aborted) {
     try {
-      const files = await readdir(config.inboxDir).catch(() => [] as string[]);
+      const files = await readdir(config.screenshotsDir).catch(() => [] as string[]);
       const pngs = files
         .filter((f) => f.startsWith("screenshot-") && f.endsWith(".png"))
         .sort();
@@ -189,7 +192,7 @@ async function extractLoop(config: Config, agent: AgentHandle, signal: AbortSign
         toProcess = toProcess.slice(-5);
         for (const f of skipped) {
           await rename(
-            join(config.inboxDir, f),
+            join(config.screenshotsDir, f),
             join(config.processedDir, f),
           );
         }
@@ -199,7 +202,7 @@ async function extractLoop(config: Config, agent: AgentHandle, signal: AbortSign
       for (const file of toProcess) {
         if (signal.aborted) break;
 
-        const pngPath = join(config.inboxDir, file);
+        const pngPath = join(config.screenshotsDir, file);
 
         const base64 = await pngToJpegBase64(pngPath);
         const tsMatch = file.match(/screenshot-(\d+)\./);
@@ -216,16 +219,17 @@ async function extractLoop(config: Config, agent: AgentHandle, signal: AbortSign
           mimeType: "image/jpeg",
         });
 
+        await mkdir(config.inboxDir, { recursive: true });
+        // Move PNG to inbox regardless
+        await rename(pngPath, join(config.inboxDir, file));
+
         if (description) {
-          const processedTxt = join(config.processedDir, file.replace(".png", ".txt"));
-          await writeFile(processedTxt, description, "utf-8");
+          await writeFile(join(config.inboxDir, file.replace(".png", ".txt")), description, "utf-8");
           console.log(`✅ ${file.replace(".png", ".txt")}`);
         } else {
           console.log(`⏭️  No changes`);
         }
 
-        // Move the PNG to processed (keep it around)
-        await rename(pngPath, join(config.processedDir, file));
         consecutiveErrors = 0;
       }
     } catch (err) {
@@ -255,8 +259,8 @@ async function main() {
 
   await ensurePromptFiles(config.rootDir);
   await seedLintQueue(config.rootDir, config.wikiDir);
-  const flushed = await flushInbox(config.inboxDir, config.processedDir);
-  if (flushed > 0) console.log(`🗑️  Flushed ${flushed} stale screenshots from inbox`);
+  const flushed = await flushInbox(config.screenshotsDir, config.processedDir);
+  if (flushed > 0) console.log(`🗑️  Flushed ${flushed} stale screenshots`);
 
   // Start browser and connect agent early so the settings API works
   await startBrowser(config.rootDir, config.wikiDir);
