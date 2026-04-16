@@ -8,6 +8,7 @@ import { connectAgent } from "./agent.js";
 import { startBrowser } from "./browser.js";
 import { ensurePromptFiles } from "./prompt.js";
 import { recordChangedFiles, pickLintTarget, markLinted, seedLintQueue } from "./lint.js";
+import { loadSettings } from "./settings.js";
 
 const DEFAULT_INTERVAL_SECS = 5;
 const DEFAULT_BATCH_SIZE = 3;
@@ -185,6 +186,12 @@ async function agentLoop(config: Config, signal: AbortSignal): Promise<void> {
 
 async function main() {
   const config = parseConfig();
+
+  // Settings override CLI defaults (CLI flags take priority if explicitly set)
+  const settings = await loadSettings(config.rootDir);
+  if (settings.screenshotIntervalSecs > 0 && config.intervalSecs === DEFAULT_INTERVAL_SECS) {
+    config.intervalSecs = settings.screenshotIntervalSecs;
+  }
 
   await ensurePromptFiles(config.rootDir);
   await seedLintQueue(config.rootDir, config.wikiDir);

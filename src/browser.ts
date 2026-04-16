@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile, readdir, writeFile, mkdir, stat } from "node:fs/promises";
 import { join, relative, extname, basename, dirname } from "node:path";
+import { loadSettings, saveSettings, type Settings } from "./settings.js";
 
 const PORT = 8112; // 8000 + ord('p')
 
@@ -52,6 +53,29 @@ async function handleRequest(
     return;
   }
 
+  // ── GET/POST: settings ──
+  if (path === "/settings") {
+    if (req.method === "POST") {
+      const body = await readBody(req);
+      const params = new URLSearchParams(body);
+      const settings: Settings = {
+        fastProvider: params.get("fastProvider") ?? "",
+        fastModel: params.get("fastModel") ?? "",
+        smartProvider: params.get("smartProvider") ?? "",
+        smartModel: params.get("smartModel") ?? "",
+        screenshotIntervalSecs: parseInt(params.get("screenshotIntervalSecs") ?? "5", 10) || 5,
+      };
+      await saveSettings(rootDir, settings);
+      res.writeHead(302, { Location: "/settings" });
+      res.end();
+      return;
+    }
+    const settings = await loadSettings(rootDir);
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(renderSettings(settings));
+    return;
+  }
+
   // ── GET: search ──
   if (path === "/search") {
     const query = url.searchParams.get("q") ?? "";
@@ -61,7 +85,7 @@ async function handleRequest(
   }
 
   // ── GET: check if it's a directory first (before .md resolution) ──
-  if (path !== "/prompt") {
+  if (path !== "/prompt" && path !== "/lint" && path !== "/settings") {
     const dirPath = join(wikiDir, path.slice(1));
     try {
       const s = await stat(dirPath);
@@ -479,6 +503,55 @@ function extractSnippet(content: string, query: string): string {
   return esc(snippet);
 }
 
+function renderSettings(settings: Settings): string {
+  const field = (label: string, name: keyof Settings, placeholder: string) => {
+    const val = esc(String(settings[name] ?? ""));
+    const type = name === "screenshotIntervalSecs" ? "number" : "text";
+    return `
+      <div class="field">
+        <label for="${name}">${label}</label>
+        <input type="${type}" id="${name}" name="${name}" value="${val}" placeholder="${placeholder}">
+      </div>`;
+  };
+
+  const body = `
+${breadcrumb("settings")}
+<h1>⚙️ Settings</h1>
+<p style="color: var(--dim)">Changes take effect on next batch. Restart for interval changes.</p>
+<form method="POST" action="/settings">
+  <fieldset>
+    <legend>Fast model (extraction & filing)</legend>
+    <p style="color: var(--dim); font-size: 0.85rem">Used for analyzing screenshots and filing observations. Can be a small/local model.</p>
+    ${field("Provider", "fastProvider", "e.g. ollama, openai, databricks")}
+    ${field("Model", "fastModel", "e.g. gemma3:27b-it-qat, gpt-4o-mini")}
+  </fieldset>
+  <fieldset>
+    <legend>Smart model (synthesis & linting)</legend>
+    <p style="color: var(--dim); font-size: 0.85rem">Used for rewriting wiki pages into proper articles. Should be your best model.</p>
+    ${field("Provider", "smartProvider", "e.g. databricks, anthropic")}
+    ${field("Model", "smartModel", "e.g. claude-sonnet-4, gpt-4o")}
+  </fieldset>
+  <fieldset>
+    <legend>Capture</legend>
+    ${field("Screenshot interval (seconds)", "screenshotIntervalSecs", "5")}
+  </fieldset>
+  <div style="margin-top: 1rem">
+    <button type="submit" class="btn" style="background: var(--accent); color: #fff; border: none; padding: 0.5rem 1.5rem; cursor: pointer">Save</button>
+    <a href="/" class="btn" style="margin-left: 0.5rem">Cancel</a>
+  </div>
+</form>
+<style>
+  fieldset { border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
+  legend { color: var(--accent); font-weight: bold; padding: 0 0.5rem; }
+  .field { margin: 0.75rem 0; }
+  .field label { display: block; margin-bottom: 0.25rem; color: var(--fg); font-size: 0.9rem; }
+  .field input { width: 100%; max-width: 400px; padding: 0.4rem 0.6rem; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; font-family: inherit; font-size: 0.9rem; }
+  .field input:focus { outline: none; border-color: var(--accent); }
+</style>
+`;
+  return wrap("Settings", body);
+}
+
 async function renderIndex(rootDir: string, wikiDir: string): Promise<string> {
   const sections = await buildTree(wikiDir, wikiDir);
   const hasPrompt = await fileExists(join(rootDir, "prompt.md"));
@@ -486,6 +559,7 @@ async function renderIndex(rootDir: string, wikiDir: string): Promise<string> {
   const configLinks = [
     hasPrompt ? '<a href="/prompt">System prompt</a>' : null,
     hasLint ? '<a href="/lint">Lint prompt</a>' : null,
+    '<a href="/settings">Settings</a>',
   ].filter(Boolean).join(" · ");
   const body = `
 ${breadcrumb("")}

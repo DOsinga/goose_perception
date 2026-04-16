@@ -13,7 +13,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "start": "tsx src/main.ts",
+    "start": "node dist/main.js",
     "postinstall": "node scripts/postinstall.mjs",
     "prepublishOnly": "tsc"
   },
