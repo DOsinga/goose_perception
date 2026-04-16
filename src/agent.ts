@@ -33,6 +33,7 @@ export interface ModelInfo {
 }
 
 export interface AgentHandle {
+  extractScreenshot(screenshot: Screenshot): Promise<string>;
   sendScreenshots(screenshots: Screenshot[]): Promise<string>;
   sendLint(file: string): Promise<string>;
   listProviders(): Promise<ProviderInfo[]>;
@@ -115,7 +116,33 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
     clientCapabilities: {},
   });
 
+  const EXTRACT_PROMPT =
+    "Describe what's happening on this screen. Focus on what would be useful " +
+    "for a daily diary entry — what the user is working on, who they're " +
+    "communicating with, what they're reading or writing. Note anything " +
+    "interesting: notifications, messages, documents, URLs, error messages, " +
+    "names of people or projects.";
+
   return {
+    async extractScreenshot(screenshot: Screenshot): Promise<string> {
+      const session = await client.newSession({
+        cwd: config.wikiDir,
+        mcpServers: [],
+      });
+
+      streamBuffer.length = 0;
+
+      await client.prompt({
+        sessionId: session.sessionId,
+        prompt: [
+          { type: "text", text: EXTRACT_PROMPT },
+          { type: "image", data: screenshot.base64, mimeType: screenshot.mimeType },
+        ] as ContentBlock[],
+      });
+
+      return streamBuffer.join("");
+    },
+
     async sendScreenshots(screenshots: Screenshot[]): Promise<string> {
       const session = await client.newSession({
         cwd: config.wikiDir,

@@ -122,7 +122,7 @@ export async function createBaseBmp(pngPath: string): Promise<string> {
  * Convert a PNG to JPEG for sending to the model.
  * Returns the base64-encoded JPEG.
  */
-async function pngToJpegBase64(pngPath: string): Promise<string> {
+export async function pngToJpegBase64(pngPath: string): Promise<string> {
   const jpgPath = pngPath + ".send.jpg";
   try {
     await new Promise<void>((resolve, reject) => {

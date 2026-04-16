@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 
 import { resolve, join } from "node:path";
-import { mkdir, rename, unlink } from "node:fs/promises";
+import { mkdir, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { parseArgs } from "node:util";
-import { takeScreenshot, collectScreenshots, countPending, cleanupProcessed, flushInbox, hasChangedEnough, createBaseBmp } from "./screenshot.js";
+import { takeScreenshot, flushInbox, hasChangedEnough, createBaseBmp, pngToJpegBase64 } from "./screenshot.js";
 import { connectAgent, type AgentHandle } from "./agent.js";
 import { startBrowser, setBrowserAgent } from "./browser.js";
 import { ensurePromptFiles } from "./prompt.js";
-import { recordChangedFiles, pickLintTarget, markLinted, seedLintQueue } from "./lint.js";
+import { seedLintQueue } from "./lint.js";
 import { loadSettings } from "./settings.js";
 
 const DEFAULT_INTERVAL_SECS = 5;
@@ -150,58 +150,58 @@ async function screenshotLoop(config: Config, signal: AbortSignal): Promise<void
   if (previousPng) await unlink(previousPng).catch(() => {});
 }
 
-async function agentLoop(config: Config, agent: AgentHandle, signal: AbortSignal): Promise<void> {
+/**
+ * Extract loop: pick up PNGs from inbox, send each to the fast model
+ * for description, save the text alongside the image.
+ */
+async function extractLoop(config: Config, agent: AgentHandle, signal: AbortSignal): Promise<void> {
   let consecutiveErrors = 0;
 
   while (!signal.aborted) {
     try {
-      const pending = await countPending(config.inboxDir);
+      const files = await readdir(config.inboxDir).catch(() => [] as string[]);
+      const pngs = files
+        .filter((f) => f.startsWith("screenshot-") && f.endsWith(".png"))
+        .sort();
 
-      if (pending < config.batchSize) {
-        await sleep(2000);
+      // Only process PNGs that don't already have a .txt companion
+      const unextracted = pngs.filter(
+        (f) => !files.includes(f.replace(".png", ".txt")),
+      );
+
+      if (unextracted.length === 0) {
+        await sleep(3000);
         continue;
       }
 
-      const screenshots = await collectScreenshots(config.inboxDir, config.processedDir);
-      if (screenshots.length === 0) {
-        await sleep(2000);
-        continue;
+      for (const file of unextracted) {
+        if (signal.aborted) break;
+
+        const pngPath = join(config.inboxDir, file);
+        const txtPath = join(config.inboxDir, file.replace(".png", ".txt"));
+
+        const base64 = await pngToJpegBase64(pngPath);
+        const tsMatch = file.match(/screenshot-(\d+)\./);
+        const timestamp = tsMatch ? new Date(parseInt(tsMatch[1]!, 10)) : new Date();
+
+        console.log(`\n${"─".repeat(60)}`);
+        console.log(`👁️  Extracting: ${file} (${timestamp.toLocaleTimeString()})`);
+        console.log(`${"─".repeat(60)}`);
+
+        const description = await agent.extractScreenshot({
+          path: pngPath,
+          timestamp,
+          base64,
+          mimeType: "image/jpeg",
+        });
+
+        await writeFile(txtPath, description, "utf-8");
+        console.log(`\n✅ Saved ${file.replace(".png", ".txt")}`);
+        consecutiveErrors = 0;
       }
-
-      const timeRange = `${screenshots[0]!.timestamp.toLocaleTimeString()}–${screenshots[screenshots.length - 1]!.timestamp.toLocaleTimeString()}`;
-      console.log(`\n${"─".repeat(60)}`);
-      console.log(`📸 ${screenshots.length} screenshots (${timeRange})`);
-      console.log(`${"─".repeat(60)}`);
-
-      const startTime = Date.now();
-      await agent.sendScreenshots(screenshots);
-      console.log("");
-      consecutiveErrors = 0;
-
-      const hadChanges = await recordChangedFiles(config.rootDir, config.wikiDir, startTime);
-      if (hadChanges) {
-        console.log("📋 Changes queued for lint");
-      } else {
-        // Nothing changed — try linting
-        const target = await pickLintTarget(config.rootDir);
-        if (target) {
-          console.log(`\n${"─".repeat(60)}`);
-          console.log(`🧹 Linting: ${target}`);
-          console.log(`${"─".repeat(60)}`);
-          try {
-            await agent.sendLint(target);
-            await markLinted(config.rootDir, target);
-            console.log("");
-          } catch (err) {
-            console.error(`🧹 Lint error:`, err instanceof Error ? err.message : err);
-          }
-        }
-      }
-
-      await cleanupProcessed(config.processedDir);
     } catch (err) {
       consecutiveErrors++;
-      console.error(`❌ Error:`, err instanceof Error ? err.message : err);
+      console.error(`❌ Extract error:`, err instanceof Error ? err.message : err);
 
       if (consecutiveErrors > 5) {
         console.error("⏳ Too many errors, backing off 30s…");
@@ -281,7 +281,7 @@ async function main() {
   });
 
   await Promise.all([
-    agentLoop(config, agent, signal),
+    extractLoop(config, agent, signal),
     sleep(2000).then(() => screenshotLoop(config, signal)),
   ]);
 }
