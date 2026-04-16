@@ -56,6 +56,21 @@ async function buildFileListing(wikiDir: string): Promise<string> {
   return lines.join("\n");
 }
 
+/**
+ * Read the last N entries from log.md.
+ */
+export async function getRecentLog(wikiDir: string, count: number = 20): Promise<string> {
+  const logPath = join(wikiDir, "log.md");
+  try {
+    const content = await readFile(logPath, "utf-8");
+    const entries = content.split(/^(?=## \[)/m).filter((e) => e.trim());
+    const recent = entries.slice(-count);
+    return recent.length > 0 ? recent.join("") : "(no log entries yet)";
+  } catch {
+    return "(no log.md yet)";
+  }
+}
+
 async function countMdFiles(dir: string): Promise<number> {
   let count = 0;
   try {

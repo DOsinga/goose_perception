@@ -72,6 +72,11 @@ not re-derived every time.
      Otherwise a file listing is provided for bootstrapping. -->
 {{WIKI_SUMMARY}}
 
+## Recent activity
+
+<!-- Last 20 log entries so you know what happened recently. -->
+{{RECENT_LOG}}
+
 ## Workflow for each batch of screenshots
 
 <!-- This is the core loop. Read first, then write. -->
@@ -179,7 +184,7 @@ export async function ensurePromptFiles(rootDir: string): Promise<boolean> {
 /**
  * Load and prepare the system prompt, substituting placeholders.
  */
-export async function loadSystemPrompt(rootDir: string, wikiDir: string, wikiSummary: string): Promise<string> {
+export async function loadSystemPrompt(rootDir: string, wikiDir: string, wikiSummary: string, recentLog: string): Promise<string> {
   const path = join(rootDir, PROMPT_FILENAME);
   let raw = await readFile(path, "utf-8");
 
@@ -189,6 +194,7 @@ export async function loadSystemPrompt(rootDir: string, wikiDir: string, wikiSum
   // Substitute placeholders
   raw = raw.replace(/\{\{WIKI_DIR\}\}/g, wikiDir);
   raw = raw.replace(/\{\{WIKI_SUMMARY\}\}/g, wikiSummary);
+  raw = raw.replace(/\{\{RECENT_LOG\}\}/g, recentLog);
 
   // Clean up excessive blank lines left by comment stripping
   raw = raw.replace(/\n{3,}/g, "\n\n");

@@ -14,7 +14,7 @@ import { ndJsonStream } from "@agentclientprotocol/sdk";
 import { GooseClient } from "@aaif/goose-acp";
 import type { Screenshot } from "./screenshot.js";
 import { loadSystemPrompt, loadLintPrompt, buildPromptBlocks } from "./prompt.js";
-import { getWikiSummary } from "./wiki.js";
+import { getWikiSummary, getRecentLog } from "./wiki.js";
 
 export interface AgentConfig {
   rootDir: string;
@@ -111,7 +111,8 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
       });
 
       const wikiSummary = await getWikiSummary(config.wikiDir);
-      const systemPrompt = await loadSystemPrompt(config.rootDir, config.wikiDir, wikiSummary);
+      const recentLog = await getRecentLog(config.wikiDir);
+      const systemPrompt = await loadSystemPrompt(config.rootDir, config.wikiDir, wikiSummary, recentLog);
       const blocks = buildPromptBlocks(screenshots);
       blocks.unshift({
         type: "text",
