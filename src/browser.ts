@@ -37,6 +37,23 @@ async function handleRequest(
   const path = decodeURIComponent(url.pathname);
   const editing = url.searchParams.has("edit");
 
+  // ── POST: save settings (must come before generic file save) ──
+  if (req.method === "POST" && path === "/settings") {
+    const body = await readBody(req);
+    const params = new URLSearchParams(body);
+    const settings: Settings = {
+      fastProvider: params.get("fastProvider") ?? "",
+      fastModel: params.get("fastModel") ?? "",
+      smartProvider: params.get("smartProvider") ?? "",
+      smartModel: params.get("smartModel") ?? "",
+      screenshotIntervalSecs: parseInt(params.get("screenshotIntervalSecs") ?? "5", 10) || 5,
+    };
+    await saveSettings(rootDir, settings);
+    res.writeHead(302, { Location: "/settings" });
+    res.end();
+    return;
+  }
+
   // ── POST: save file ──
   if (req.method === "POST") {
     const body = await readBody(req);
@@ -92,23 +109,8 @@ async function handleRequest(
     return;
   }
 
-  // ── GET/POST: settings ──
+  // ── GET: settings ──
   if (path === "/settings") {
-    if (req.method === "POST") {
-      const body = await readBody(req);
-      const params = new URLSearchParams(body);
-      const settings: Settings = {
-        fastProvider: params.get("fastProvider") ?? "",
-        fastModel: params.get("fastModel") ?? "",
-        smartProvider: params.get("smartProvider") ?? "",
-        smartModel: params.get("smartModel") ?? "",
-        screenshotIntervalSecs: parseInt(params.get("screenshotIntervalSecs") ?? "5", 10) || 5,
-      };
-      await saveSettings(rootDir, settings);
-      res.writeHead(302, { Location: "/settings" });
-      res.end();
-      return;
-    }
     const settings = await loadSettings(rootDir);
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(renderSettings(settings));

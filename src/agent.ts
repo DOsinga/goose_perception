@@ -161,21 +161,56 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
     },
 
     async listProviders(): Promise<ProviderInfo[]> {
-      const result = await client.goose.GooseProvidersDetails({});
-      return result.providers
-        .filter((p) => p.isConfigured)
-        .map((p) => ({
-          id: p.name,
-          label: p.displayName || p.name,
-        }));
+      try {
+        const result = await client.goose.GooseProvidersDetails({});
+        return result.providers
+          .filter((p) => p.isConfigured)
+          .map((p) => ({
+            id: p.name,
+            label: p.displayName || p.name,
+          }));
+      } catch {
+        // Older goose without GooseProvidersDetails — fall back to list + hardcoded filter
+        const result = await client.goose.GooseProvidersList({});
+        const known = new Map([
+          ["databricks", "Databricks"],
+          ["anthropic", "Anthropic"],
+          ["openai", "OpenAI"],
+          ["local", "Local Inference"],
+        ]);
+        return result.providers
+          .filter((p: { id: string }) => known.has(p.id))
+          .map((p: { id: string; label: string }) => ({
+            id: p.id,
+            label: known.get(p.id) ?? p.label,
+          }));
+      }
     },
 
     async listModels(provider: string): Promise<{ models: ModelInfo[]; current: string }> {
-      const result = await client.goose.GooseProvidersModels({ providerName: provider });
-      return {
-        models: result.models.map((id) => ({ id, name: id })),
-        current: result.models[0] ?? "",
-      };
+      try {
+        const result = await client.goose.GooseProvidersModels({ providerName: provider });
+        return {
+          models: result.models.map((id) => ({ id, name: id })),
+          current: result.models[0] ?? "",
+        };
+      } catch {
+        // Older goose — create a throwaway session to get model list
+        const session = await client.newSession({
+          cwd: config.wikiDir,
+          mcpServers: [],
+          _meta: { provider },
+        });
+        const models: ModelInfo[] = [];
+        let current = "";
+        if (session.models) {
+          current = session.models.currentModelId ?? "";
+          for (const m of session.models.availableModels ?? []) {
+            models.push({ id: m.modelId, name: m.name || m.modelId });
+          }
+        }
+        return { models, current };
+      }
     },
 
     shutdown() {
@@ -198,6 +233,20 @@ function findServerBinary(): string | null {
       return data.binaryPath ?? null;
     } catch {
       // not found here, try next
+    }
+  }
+
+  // Check well-known install locations before PATH (PATH may have stale versions)
+  const wellKnown = [
+    "/opt/homebrew/bin/goose",
+    "/usr/local/bin/goose",
+  ];
+  for (const bin of wellKnown) {
+    try {
+      execFileSync(bin, ["--version"], { encoding: "utf-8" });
+      return bin;
+    } catch {
+      // not here
     }
   }
 

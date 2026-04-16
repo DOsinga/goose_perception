@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
 import { resolve, join } from "node:path";
+import { mkdir, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { parseArgs } from "node:util";
-import { takeScreenshot, collectScreenshots, countPending, cleanupProcessed, flushInbox } from "./screenshot.js";
+import { takeScreenshot, collectScreenshots, countPending, cleanupProcessed, flushInbox, hasChangedEnough, createBaseBmp } from "./screenshot.js";
 import { connectAgent, type AgentHandle } from "./agent.js";
 import { startBrowser, setBrowserAgent } from "./browser.js";
 import { ensurePromptFiles } from "./prompt.js";
@@ -102,14 +103,51 @@ function restoreTerminal() {
 }
 
 async function screenshotLoop(config: Config, signal: AbortSignal): Promise<void> {
+  const stagingDir = join(config.rootDir, "staging");
+  await mkdir(stagingDir, { recursive: true });
+
+  let baseBmpPath: string | null = null;
+  let previousPng: string | null = null;
+
   while (!signal.aborted) {
     try {
-      await takeScreenshot(config.inboxDir);
+      // Capture to staging, not inbox
+      const currentPng = await takeScreenshot(stagingDir);
+
+      if (!baseBmpPath) {
+        // First screenshot — becomes the base
+        baseBmpPath = await createBaseBmp(currentPng);
+        previousPng = currentPng;
+      } else {
+        const { changed, diff } = await hasChangedEnough(currentPng, baseBmpPath);
+        if (changed) {
+          // Screen changed — emit the previous (stable state before the change)
+          if (previousPng) {
+            const filename = `screenshot-${Date.now()}.png`;
+            await rename(previousPng, join(config.inboxDir, filename));
+            console.log(`📸 Screen changed (${(diff * 100).toFixed(1)}% diff) — saved to inbox`);
+          }
+          // Current becomes the new base
+          await unlink(baseBmpPath).catch(() => {});
+          baseBmpPath = await createBaseBmp(currentPng);
+          previousPng = currentPng;
+        } else {
+          // No significant change — replace previous with current
+          if (previousPng && previousPng !== currentPng) {
+            await unlink(previousPng).catch(() => {});
+          }
+          previousPng = currentPng;
+        }
+      }
     } catch (err) {
       console.error(`📷 Screenshot failed:`, err instanceof Error ? err.message : err);
     }
     await sleep(config.intervalSecs * 1000);
   }
+
+  // Cleanup
+  if (baseBmpPath) await unlink(baseBmpPath).catch(() => {});
+  if (previousPng) await unlink(previousPng).catch(() => {});
 }
 
 async function agentLoop(config: Config, agent: AgentHandle, signal: AbortSignal): Promise<void> {

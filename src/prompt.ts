@@ -246,7 +246,7 @@ export function buildPromptBlocks(screenshots: Screenshot[]): Array<
     blocks.push({
       type: "image" as const,
       data: screenshot.base64,
-      mimeType: "image/jpeg",
+      mimeType: screenshot.mimeType,
     });
   }
 
