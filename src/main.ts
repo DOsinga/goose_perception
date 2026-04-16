@@ -2,6 +2,7 @@
 
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
+import { execFile } from "node:child_process";
 import { parseArgs } from "node:util";
 import { takeScreenshot, collectScreenshots, countPending, cleanupProcessed, flushInbox } from "./screenshot.js";
 import { connectAgent } from "./agent.js";
@@ -197,9 +198,31 @@ async function main() {
   await seedLintQueue(config.rootDir, config.wikiDir);
   const flushed = await flushInbox(config.inboxDir, config.processedDir);
   if (flushed > 0) console.log(`🗑️  Flushed ${flushed} stale screenshots from inbox`);
-  printBanner(config);
 
   await startBrowser(config.rootDir, config.wikiDir);
+
+  const needsSetup = !settings.smartProvider || !settings.smartModel;
+  if (needsSetup) {
+    const settingsUrl = `http://localhost:${BROWSER_PORT}/settings`;
+    console.log("⚙️  No models configured — opening settings…");
+    const cmd = process.platform === "darwin" ? "open" : "xdg-open";
+    execFile(cmd, [settingsUrl], () => {});
+
+    // Wait for the user to save settings
+    while (true) {
+      await sleep(2000);
+      const updated = await loadSettings(config.rootDir);
+      if (updated.smartProvider && updated.smartModel) {
+        if (updated.screenshotIntervalSecs > 0) {
+          config.intervalSecs = updated.screenshotIntervalSecs;
+        }
+        console.log(`✅ Settings saved — using ${updated.smartProvider}/${updated.smartModel}\n`);
+        break;
+      }
+    }
+  }
+
+  printBanner(config);
 
   const abortController = new AbortController();
   const { signal } = abortController;
