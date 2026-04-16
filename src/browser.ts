@@ -649,6 +649,14 @@ ${breadcrumb("settings")}
         return;
       }
       const data = await loadModels(provider);
+      if (data.error) {
+        modelSel.innerHTML = '<option value="" disabled>⚠️ Provider not configured</option>';
+        return;
+      }
+      if (data.models.length === 0) {
+        modelSel.innerHTML = '<option value="">No models available</option>';
+        return;
+      }
       populateSelect(modelSel, data.models.map(m => ({ id: m.id, label: m.name })),
         provider === savedProvider ? savedModel : data.current);
     }
