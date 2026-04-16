@@ -10,7 +10,7 @@ import { connectAgent, type AgentHandle } from "./agent.js";
 import { startBrowser, setBrowserAgent } from "./browser.js";
 import { ensurePromptFiles } from "./prompt.js";
 import { seedLintQueue } from "./lint.js";
-import { loadSettings } from "./settings.js";
+import { loadSettings, type Settings } from "./settings.js";
 
 const DEFAULT_INTERVAL_SECS = 5;
 const DEFAULT_BATCH_SIZE = 3;
@@ -75,10 +75,9 @@ function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*[a-zA-Z]|\x1b\]8;;[^\x1b]*\x1b\\/g, "");
 }
 
-function printBanner(config: Config) {
+function printBanner(config: Config, settings: Settings) {
   const url = `http://localhost:${BROWSER_PORT}`;
   const rows = process.stdout.rows ?? 24;
-
   const cols = process.stdout.columns ?? 80;
 
   // OSC 8 clickable link
@@ -92,9 +91,18 @@ function printBanner(config: Config) {
   const pad = Math.max(0, cols - stripAnsi(text).length);
   process.stdout.write(`\x1b[97;44m  goose perception  ${link}  ${config.wikiDir}${" ".repeat(pad)}\x1b[0m\n`);
 
-  // Set scroll region below banner (line 2 onward)
-  process.stdout.write(`\x1b[2;${rows}r`);
-  process.stdout.write(`\x1b[2;1H`);
+  // Config summary
+  const fast = settings.fastProvider && settings.fastModel
+    ? `${settings.fastProvider}/${settings.fastModel}`
+    : "default";
+  const smart = settings.smartProvider && settings.smartModel
+    ? `${settings.smartProvider}/${settings.smartModel}`
+    : "default";
+  console.log(`  ⚡ Fast: ${fast}  |  🧠 Smart: ${smart}  |  📷 Every ${config.intervalSecs}s`);
+
+  // Set scroll region below banner (lines 3+ onward)
+  process.stdout.write(`\x1b[3;${rows}r`);
+  process.stdout.write(`\x1b[3;1H`);
 }
 
 function restoreTerminal() {
@@ -265,7 +273,7 @@ async function main() {
     }
   }
 
-  printBanner(config);
+  printBanner(config, settings);
 
   const abortController = new AbortController();
   const { signal } = abortController;
@@ -281,7 +289,7 @@ async function main() {
   process.on("SIGTERM", shutdown);
   process.stdout.on("resize", () => {
     const rows = process.stdout.rows ?? 24;
-    process.stdout.write(`\x1b[4;${rows}r`);
+    process.stdout.write(`\x1b[3;${rows}r`);
   });
 
   await Promise.all([
