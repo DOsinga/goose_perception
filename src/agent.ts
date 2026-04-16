@@ -22,9 +22,21 @@ export interface AgentConfig {
   serverUrl?: string;
 }
 
+export interface ProviderInfo {
+  id: string;
+  label: string;
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+}
+
 export interface AgentHandle {
   sendScreenshots(screenshots: Screenshot[]): Promise<string>;
   sendLint(file: string): Promise<string>;
+  listProviders(): Promise<ProviderInfo[]>;
+  listModels(provider: string): Promise<{ models: ModelInfo[]; current: string }>;
   shutdown(): void;
 }
 
@@ -146,6 +158,35 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
       });
 
       return streamBuffer.join("");
+    },
+
+    async listProviders(): Promise<ProviderInfo[]> {
+      const result = await client.goose.GooseProvidersList({});
+      return result.providers.map((p: { id: string; label: string }) => ({
+        id: p.id,
+        label: p.label,
+      }));
+    },
+
+    async listModels(provider: string): Promise<{ models: ModelInfo[]; current: string }> {
+      // Create a throwaway session with the requested provider to get its model list
+      const session = await client.newSession({
+        cwd: config.wikiDir,
+        mcpServers: [],
+        _meta: { provider },
+      });
+
+      const models: ModelInfo[] = [];
+      let current = "";
+
+      if (session.models) {
+        current = session.models.currentModelId ?? "";
+        for (const m of session.models.availableModels ?? []) {
+          models.push({ id: m.modelId, name: m.name || m.modelId });
+        }
+      }
+
+      return { models, current };
     },
 
     shutdown() {

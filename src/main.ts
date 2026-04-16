@@ -5,8 +5,8 @@ import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { parseArgs } from "node:util";
 import { takeScreenshot, collectScreenshots, countPending, cleanupProcessed, flushInbox } from "./screenshot.js";
-import { connectAgent } from "./agent.js";
-import { startBrowser } from "./browser.js";
+import { connectAgent, type AgentHandle } from "./agent.js";
+import { startBrowser, setBrowserAgent } from "./browser.js";
 import { ensurePromptFiles } from "./prompt.js";
 import { recordChangedFiles, pickLintTarget, markLinted, seedLintQueue } from "./lint.js";
 import { loadSettings } from "./settings.js";
@@ -112,15 +112,7 @@ async function screenshotLoop(config: Config, signal: AbortSignal): Promise<void
   }
 }
 
-async function agentLoop(config: Config, signal: AbortSignal): Promise<void> {
-  console.log("🤝 Connecting to goose…");
-  const agent = await connectAgent({
-    rootDir: config.rootDir,
-    wikiDir: config.wikiDir,
-    serverUrl: config.serverUrl,
-  });
-  console.log("✅ Agent connected\n");
-
+async function agentLoop(config: Config, agent: AgentHandle, signal: AbortSignal): Promise<void> {
   let consecutiveErrors = 0;
 
   while (!signal.aborted) {
@@ -199,7 +191,17 @@ async function main() {
   const flushed = await flushInbox(config.inboxDir, config.processedDir);
   if (flushed > 0) console.log(`🗑️  Flushed ${flushed} stale screenshots from inbox`);
 
+  // Start browser and connect agent early so the settings API works
   await startBrowser(config.rootDir, config.wikiDir);
+
+  console.log("🤝 Connecting to goose…");
+  const agent = await connectAgent({
+    rootDir: config.rootDir,
+    wikiDir: config.wikiDir,
+    serverUrl: config.serverUrl,
+  });
+  setBrowserAgent(agent);
+  console.log("✅ Agent connected");
 
   const needsSetup = !settings.smartProvider || !settings.smartModel;
   if (needsSetup) {
@@ -208,7 +210,6 @@ async function main() {
     const cmd = process.platform === "darwin" ? "open" : "xdg-open";
     execFile(cmd, [settingsUrl], () => {});
 
-    // Wait for the user to save settings
     while (true) {
       await sleep(2000);
       const updated = await loadSettings(config.rootDir);
@@ -242,7 +243,7 @@ async function main() {
   });
 
   await Promise.all([
-    agentLoop(config, signal),
+    agentLoop(config, agent, signal),
     sleep(2000).then(() => screenshotLoop(config, signal)),
   ]);
 }

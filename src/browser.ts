@@ -2,8 +2,15 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readFile, readdir, writeFile, mkdir, stat } from "node:fs/promises";
 import { join, relative, extname, basename, dirname } from "node:path";
 import { loadSettings, saveSettings, type Settings } from "./settings.js";
+import type { AgentHandle } from "./agent.js";
 
 const PORT = 8112; // 8000 + ord('p')
+
+let agentRef: AgentHandle | null = null;
+
+export function setBrowserAgent(agent: AgentHandle): void {
+  agentRef = agent;
+}
 
 export async function startBrowser(rootDir: string, wikiDir: string): Promise<void> {
   const server = createServer(async (req, res) => {
@@ -50,6 +57,38 @@ async function handleRequest(
   if (path === "/") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(await renderIndex(rootDir, wikiDir));
+    return;
+  }
+
+  // ── API: providers and models ──
+  if (path === "/api/providers") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    if (!agentRef) {
+      res.end(JSON.stringify({ providers: [], error: "Agent not connected yet" }));
+    } else {
+      try {
+        const providers = await agentRef.listProviders();
+        res.end(JSON.stringify({ providers }));
+      } catch (err) {
+        res.end(JSON.stringify({ providers: [], error: String(err) }));
+      }
+    }
+    return;
+  }
+
+  if (path === "/api/models") {
+    const provider = url.searchParams.get("provider") ?? "";
+    res.writeHead(200, { "Content-Type": "application/json" });
+    if (!agentRef || !provider) {
+      res.end(JSON.stringify({ models: [], current: "" }));
+    } else {
+      try {
+        const result = await agentRef.listModels(provider);
+        res.end(JSON.stringify(result));
+      } catch (err) {
+        res.end(JSON.stringify({ models: [], current: "", error: String(err) }));
+      }
+    }
     return;
   }
 
@@ -504,16 +543,6 @@ function extractSnippet(content: string, query: string): string {
 }
 
 function renderSettings(settings: Settings): string {
-  const field = (label: string, name: keyof Settings, placeholder: string) => {
-    const val = esc(String(settings[name] ?? ""));
-    const type = name === "screenshotIntervalSecs" ? "number" : "text";
-    return `
-      <div class="field">
-        <label for="${name}">${label}</label>
-        <input type="${type}" id="${name}" name="${name}" value="${val}" placeholder="${placeholder}">
-      </div>`;
-  };
-
   const body = `
 ${breadcrumb("settings")}
 <h1>⚙️ Settings</h1>
@@ -522,21 +551,37 @@ ${breadcrumb("settings")}
   <fieldset>
     <legend>Fast model (extraction & filing)</legend>
     <p style="color: var(--dim); font-size: 0.85rem">Used for analyzing screenshots and filing observations. Can be a small/local model.</p>
-    ${field("Provider", "fastProvider", "e.g. ollama, openai, databricks")}
-    ${field("Model", "fastModel", "e.g. gemma3:27b-it-qat, gpt-4o-mini")}
+    <div class="field">
+      <label>Provider</label>
+      <select id="fastProvider" name="fastProvider"><option value="">Loading…</option></select>
+    </div>
+    <div class="field">
+      <label>Model</label>
+      <select id="fastModel" name="fastModel"><option value="">Select a provider first</option></select>
+    </div>
   </fieldset>
   <fieldset>
     <legend>Smart model (synthesis & linting)</legend>
     <p style="color: var(--dim); font-size: 0.85rem">Used for rewriting wiki pages into proper articles. Should be your best model.</p>
-    ${field("Provider", "smartProvider", "e.g. databricks, anthropic")}
-    ${field("Model", "smartModel", "e.g. claude-sonnet-4, gpt-4o")}
+    <div class="field">
+      <label>Provider</label>
+      <select id="smartProvider" name="smartProvider"><option value="">Loading…</option></select>
+    </div>
+    <div class="field">
+      <label>Model</label>
+      <select id="smartModel" name="smartModel"><option value="">Select a provider first</option></select>
+    </div>
   </fieldset>
   <fieldset>
     <legend>Capture</legend>
-    ${field("Screenshot interval (seconds)", "screenshotIntervalSecs", "5")}
+    <div class="field">
+      <label for="screenshotIntervalSecs">Screenshot interval (seconds)</label>
+      <input type="number" id="screenshotIntervalSecs" name="screenshotIntervalSecs"
+        value="${esc(String(settings.screenshotIntervalSecs))}" min="1">
+    </div>
   </fieldset>
   <div style="margin-top: 1rem">
-    <button type="submit" class="btn" style="background: var(--accent); color: #fff; border: none; padding: 0.5rem 1.5rem; cursor: pointer">Save</button>
+    <button type="submit" class="btn save-btn">Save</button>
     <a href="/" class="btn" style="margin-left: 0.5rem">Cancel</a>
   </div>
 </form>
@@ -545,9 +590,76 @@ ${breadcrumb("settings")}
   legend { color: var(--accent); font-weight: bold; padding: 0 0.5rem; }
   .field { margin: 0.75rem 0; }
   .field label { display: block; margin-bottom: 0.25rem; color: var(--fg); font-size: 0.9rem; }
-  .field input { width: 100%; max-width: 400px; padding: 0.4rem 0.6rem; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; font-family: inherit; font-size: 0.9rem; }
-  .field input:focus { outline: none; border-color: var(--accent); }
+  .field select, .field input {
+    width: 100%; max-width: 400px; padding: 0.4rem 0.6rem;
+    background: var(--bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 4px;
+    font-family: inherit; font-size: 0.9rem;
+  }
+  .field select:focus, .field input:focus { outline: none; border-color: var(--accent); }
+  .save-btn { background: var(--accent); color: #fff; border: none; padding: 0.5rem 1.5rem; cursor: pointer; border-radius: 4px; }
+  .loading { color: var(--dim); font-style: italic; }
 </style>
+<script>
+  const saved = ${JSON.stringify({
+    fastProvider: settings.fastProvider,
+    fastModel: settings.fastModel,
+    smartProvider: settings.smartProvider,
+    smartModel: settings.smartModel,
+  })};
+
+  async function loadProviders() {
+    const res = await fetch('/api/providers');
+    const data = await res.json();
+    if (data.error) {
+      console.warn('Provider fetch error:', data.error);
+    }
+    return data.providers || [];
+  }
+
+  async function loadModels(provider) {
+    if (!provider) return { models: [], current: '' };
+    const res = await fetch('/api/models?provider=' + encodeURIComponent(provider));
+    return await res.json();
+  }
+
+  function populateSelect(sel, items, selectedValue) {
+    sel.innerHTML = '<option value="">— select —</option>';
+    for (const item of items) {
+      const opt = document.createElement('option');
+      opt.value = item.id;
+      opt.textContent = item.label || item.name || item.id;
+      if (item.id === selectedValue) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  }
+
+  async function setupPair(providerSelId, modelSelId, savedProvider, savedModel) {
+    const providerSel = document.getElementById(providerSelId);
+    const modelSel = document.getElementById(modelSelId);
+
+    const providers = await loadProviders();
+    populateSelect(providerSel, providers, savedProvider);
+
+    async function onProviderChange() {
+      const provider = providerSel.value;
+      modelSel.innerHTML = '<option value="">Loading models…</option>';
+      if (!provider) {
+        modelSel.innerHTML = '<option value="">Select a provider first</option>';
+        return;
+      }
+      const data = await loadModels(provider);
+      populateSelect(modelSel, data.models.map(m => ({ id: m.id, label: m.name })),
+        provider === savedProvider ? savedModel : data.current);
+    }
+
+    providerSel.addEventListener('change', onProviderChange);
+    if (savedProvider) await onProviderChange();
+  }
+
+  setupPair('fastProvider', 'fastModel', saved.fastProvider, saved.fastModel);
+  setupPair('smartProvider', 'smartModel', saved.smartProvider, saved.smartModel);
+</script>
 `;
   return wrap("Settings", body);
 }
