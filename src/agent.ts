@@ -20,6 +20,10 @@ export interface AgentConfig {
   rootDir: string;
   wikiDir: string;
   serverUrl?: string;
+  fastProvider?: string;
+  fastModel?: string;
+  smartProvider?: string;
+  smartModel?: string;
 }
 
 export interface ProviderInfo {
@@ -123,17 +127,35 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
     "interesting: notifications, messages, documents, URLs, error messages, " +
     "names of people or projects.";
 
+  async function createSession(kind: "fast" | "smart"): Promise<string> {
+    const provider = kind === "fast" ? config.fastProvider : config.smartProvider;
+    const model = kind === "fast" ? config.fastModel : config.smartModel;
+
+    const session = await client.newSession({
+      cwd: config.wikiDir,
+      mcpServers: [],
+      ...(provider ? { _meta: { provider } } : {}),
+    });
+
+    if (provider && model) {
+      await client.goose.GooseSessionProviderUpdate({
+        sessionId: session.sessionId,
+        provider,
+        model,
+      });
+    }
+
+    return session.sessionId;
+  }
+
   return {
     async extractScreenshot(screenshot: Screenshot): Promise<string> {
-      const session = await client.newSession({
-        cwd: config.wikiDir,
-        mcpServers: [],
-      });
+      const sessionId = await createSession("fast");
 
       streamBuffer.length = 0;
 
       await client.prompt({
-        sessionId: session.sessionId,
+        sessionId,
         prompt: [
           { type: "text", text: EXTRACT_PROMPT },
           { type: "image", data: screenshot.base64, mimeType: screenshot.mimeType },
@@ -144,10 +166,7 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
     },
 
     async sendScreenshots(screenshots: Screenshot[]): Promise<string> {
-      const session = await client.newSession({
-        cwd: config.wikiDir,
-        mcpServers: [],
-      });
+      const sessionId = await createSession("smart");
 
       const wikiSummary = await getWikiSummary(config.wikiDir);
       const recentLog = await getRecentLog(config.wikiDir);
@@ -161,7 +180,7 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
       streamBuffer.length = 0;
 
       await client.prompt({
-        sessionId: session.sessionId,
+        sessionId,
         prompt: blocks as ContentBlock[],
       });
 
@@ -169,10 +188,7 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
     },
 
     async sendLint(file: string): Promise<string> {
-      const session = await client.newSession({
-        cwd: config.wikiDir,
-        mcpServers: [],
-      });
+      const sessionId = await createSession("smart");
 
       const wikiSummary = await getWikiSummary(config.wikiDir);
       const lintPrompt = await loadLintPrompt(config.rootDir, config.wikiDir, wikiSummary, file);
@@ -180,7 +196,7 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
       streamBuffer.length = 0;
 
       await client.prompt({
-        sessionId: session.sessionId,
+        sessionId,
         prompt: [{ type: "text", text: lintPrompt } as ContentBlock],
       });
 

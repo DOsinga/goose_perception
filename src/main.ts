@@ -237,6 +237,10 @@ async function main() {
     rootDir: config.rootDir,
     wikiDir: config.wikiDir,
     serverUrl: config.serverUrl,
+    fastProvider: settings.fastProvider || undefined,
+    fastModel: settings.fastModel || undefined,
+    smartProvider: settings.smartProvider || undefined,
+    smartModel: settings.smartModel || undefined,
   });
   setBrowserAgent(agent);
   console.log("✅ Agent connected");
