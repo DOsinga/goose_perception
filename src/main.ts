@@ -2,6 +2,7 @@
 
 import { resolve, join } from "node:path";
 import { mkdir, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { parseArgs } from "node:util";
@@ -11,6 +12,19 @@ import { startBrowser, setBrowserAgent } from "./browser.js";
 import { ensurePromptFiles } from "./prompt.js";
 import { seedLintQueue } from "./lint.js";
 import { loadSettings } from "./settings.js";
+
+// Capture all output to a log file
+const logLines: string[] = [];
+const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+process.stdout.write = (chunk: string | Uint8Array, ...args: unknown[]): boolean => {
+  if (typeof chunk === "string") logLines.push(chunk);
+  return (originalStdoutWrite as (...a: unknown[]) => boolean)(chunk, ...args);
+};
+const originalConsoleLog = console.log.bind(console);
+console.log = (...args: unknown[]) => {
+  logLines.push(args.map(String).join(" ") + "\n");
+  originalConsoleLog(...args);
+};
 
 const DEFAULT_INTERVAL_SECS = 5;
 const DEFAULT_BATCH_SIZE = 3;
@@ -284,7 +298,11 @@ async function main() {
 
   const shutdown = () => {
     restoreTerminal();
-    console.log("\n👋 Shutting down…");
+    const logFile = join(config.rootDir, "last-session.log");
+    try {
+      writeFileSync(logFile, logLines.join(""));
+    } catch { /* best effort */ }
+    originalConsoleLog(`\n👋 Shutting down — log written to ${logFile}`);
     abortController.abort();
     setTimeout(() => process.exit(0), 1000);
   };
