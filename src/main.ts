@@ -177,21 +177,29 @@ async function extractLoop(config: Config, agent: AgentHandle, signal: AbortSign
         .filter((f) => f.startsWith("screenshot-") && f.endsWith(".png"))
         .sort();
 
-      // Only process PNGs that don't already have a .txt companion
-      const unextracted = pngs.filter(
-        (f) => !files.includes(f.replace(".png", ".txt")),
-      );
-
-      if (unextracted.length === 0) {
+      if (pngs.length === 0) {
         await sleep(3000);
         continue;
       }
 
-      for (const file of unextracted) {
+      // If we're falling behind, skip to the most recent 5
+      let toProcess = pngs;
+      if (toProcess.length > 5) {
+        const skipped = toProcess.slice(0, -5);
+        toProcess = toProcess.slice(-5);
+        for (const f of skipped) {
+          await rename(
+            join(config.inboxDir, f),
+            join(config.processedDir, f),
+          );
+        }
+        console.log(`⏩ Skipped ${skipped.length} old screenshots, processing latest ${toProcess.length}`);
+      }
+
+      for (const file of toProcess) {
         if (signal.aborted) break;
 
         const pngPath = join(config.inboxDir, file);
-        const txtPath = join(config.inboxDir, file.replace(".png", ".txt"));
 
         const base64 = await pngToJpegBase64(pngPath);
         const tsMatch = file.match(/screenshot-(\d+)\./);
@@ -209,12 +217,15 @@ async function extractLoop(config: Config, agent: AgentHandle, signal: AbortSign
         });
 
         if (description) {
-          await writeFile(txtPath, description, "utf-8");
+          const processedTxt = join(config.processedDir, file.replace(".png", ".txt"));
+          await writeFile(processedTxt, description, "utf-8");
           console.log(`✅ ${file.replace(".png", ".txt")}`);
         } else {
           console.log(`⏭️  No changes`);
-          await unlink(pngPath);
         }
+
+        // Move the PNG to processed (keep it around)
+        await rename(pngPath, join(config.processedDir, file));
         consecutiveErrors = 0;
       }
     } catch (err) {
