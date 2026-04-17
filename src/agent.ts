@@ -122,9 +122,10 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
         } else if (update.sessionUpdate === "usage_update") {
           const u = update as any;
           if (u.cost?.amount != null) {
-            usage[currentSessionKind].cost = u.cost.amount;
+            usage[currentSessionKind].cost += u.cost.amount;
             usage[currentSessionKind].currency = u.cost.currency ?? "USD";
           }
+          // usage_update events are informational only — cost already tracked above
         }
       },
       requestPermission: async (
@@ -161,11 +162,34 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
 
   let lastExtraction = "";
 
-  function trackPromptUsage(kind: "fast" | "smart", response: any) {
+  // Rough token estimation: ~4 chars per token for English text
+  function estimateTokens(text: string): number {
+    return Math.ceil(text.length / 4);
+  }
+
+  function trackPromptUsage(kind: "fast" | "smart", response: any, promptText?: string) {
     const u = response?.usage;
-    if (u) {
+    if (u && (u.inputTokens || u.outputTokens)) {
       usage[kind].inputTokens += u.inputTokens ?? 0;
       usage[kind].outputTokens += u.outputTokens ?? 0;
+    } else {
+      // Goose didn't report usage — estimate from text sizes
+      const inputEst = promptText ? estimateTokens(promptText) : 0;
+      // For fast model (extraction), image adds ~1500 tokens
+      const imageTokens = kind === "fast" ? 1500 : 0;
+      usage[kind].inputTokens += inputEst + imageTokens;
+      // Estimate output from streamBuffer
+      const outputEst = estimateTokens(streamBuffer.join(""));
+      usage[kind].outputTokens += outputEst;
+    }
+
+    // Update cost estimates based on known model pricing
+    // GPT-4o-mini: $0.15/M in, $0.60/M out
+    // Claude Opus: $15/M in, $75/M out
+    if (kind === "fast") {
+      usage.fast.cost = (usage.fast.inputTokens * 0.15 + usage.fast.outputTokens * 0.60) / 1_000_000;
+    } else {
+      usage.smart.cost = (usage.smart.inputTokens * 15 + usage.smart.outputTokens * 75) / 1_000_000;
     }
   }
 
@@ -210,7 +234,7 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
           { type: "image", data: screenshot.base64, mimeType: screenshot.mimeType },
         ] as ContentBlock[],
       });
-      trackPromptUsage("fast", response);
+      trackPromptUsage("fast", response, prompt);
 
       const result = streamBuffer.join("").trim();
       if (result.includes("NO CHANGES") || result.includes("NO REAL CHANGES")) {
@@ -247,13 +271,14 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
 
       streamBuffer.length = 0;
 
+      const fullPrompt = systemPrompt + "\n\n---\n\n" + body;
       const extractionsResp = await client.prompt({
         sessionId,
         prompt: [
-          { type: "text", text: systemPrompt + "\n\n---\n\n" + body },
+          { type: "text", text: fullPrompt },
         ] as ContentBlock[],
       });
-      trackPromptUsage("smart", extractionsResp);
+      trackPromptUsage("smart", extractionsResp, fullPrompt);
 
       return streamBuffer.join("");
     },
@@ -276,7 +301,8 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
         sessionId,
         prompt: blocks as ContentBlock[],
       });
-      trackPromptUsage("smart", screenshotsResp);
+      const screenshotPromptText = blocks.filter(b => b.type === "text").map(b => (b as any).text).join("\n");
+      trackPromptUsage("smart", screenshotsResp, screenshotPromptText);
 
       return streamBuffer.join("");
     },
@@ -293,7 +319,7 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
         sessionId,
         prompt: [{ type: "text", text: lintPrompt } as ContentBlock],
       });
-      trackPromptUsage("smart", lintResp);
+      trackPromptUsage("smart", lintResp, lintPrompt);
 
       return streamBuffer.join("");
     },
