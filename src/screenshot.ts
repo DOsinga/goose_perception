@@ -69,7 +69,7 @@ export function getFrontWindow(): WindowInfo {
     const [idStr, app, ...titleParts] = out.split("|");
     const windowId = parseInt(idStr ?? "0", 10);
     const title = titleParts.join("|"); // title may contain |
-    const url = getBrowserUrl(app ?? "");
+    const url = "";
     return { windowId, app: app ?? "", title: title ?? "", url };
   } catch {
     // Fallback: just get the app name
@@ -84,24 +84,9 @@ export function getFrontWindow(): WindowInfo {
   }
 }
 
-function getBrowserUrl(app: string): string {
-  const scripts: Record<string, string> = {
-    "Google Chrome": 'tell application "Google Chrome" to get URL of active tab of front window',
-    Safari: 'tell application "Safari" to get URL of front document',
-    Arc: 'tell application "Arc" to get URL of active tab of front window',
-    Firefox: 'tell application "Firefox" to get URL of active tab of front window',
-  };
-  const script = scripts[app];
-  if (!script) return "";
-  try {
-    return execFileSync("osascript", ["-e", script], {
-      encoding: "utf-8",
-      timeout: 2000,
-    }).trim();
-  } catch {
-    return "";
-  }
-}
+// Browser URL fetching via AppleScript is possible but triggers macOS
+// Automation permission prompts for every app. Window titles already
+// contain the page title which is more useful in practice.
 
 // ── Capture ──
 
