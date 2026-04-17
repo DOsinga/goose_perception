@@ -162,9 +162,13 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
 
       streamBuffer.length = 0;
 
-      const prompt = lastExtraction
-        ? `${EXTRACT_PROMPT}\n\nYour previous description was:\n${lastExtraction}`
-        : EXTRACT_PROMPT;
+      const win = screenshot.windowInfo;
+      const context = win
+        ? `Active window: ${win.app}${win.title ? ` — ${win.title}` : ""}${win.url ? `\nURL: ${win.url}` : ""}\n\n`
+        : "";
+
+      const prompt = context + EXTRACT_PROMPT +
+        (lastExtraction ? `\n\nYour previous transcription was:\n${lastExtraction}` : "");
 
       await client.prompt({
         sessionId,

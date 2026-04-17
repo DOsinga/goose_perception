@@ -6,7 +6,11 @@ import { writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { parseArgs } from "node:util";
-import { takeScreenshot, flushInbox, hasChangedEnough, createBaseBmp, pngToJpegBase64 } from "./screenshot.js";
+import {
+  takeScreenshot, flushInbox, hasChangedEnough, createBaseBmp,
+  pngToJpegBase64, getFrontWindow, writeWindowInfo, readWindowInfo,
+  type WindowInfo,
+} from "./screenshot.js";
 import { connectAgent, type AgentHandle } from "./agent.js";
 import { startBrowser, setBrowserAgent } from "./browser.js";
 import { ensurePromptFiles } from "./prompt.js";
@@ -120,39 +124,59 @@ function restoreTerminal() {
 async function screenshotLoop(config: Config, signal: AbortSignal): Promise<void> {
   const stagingDir = join(config.rootDir, "staging");
   await mkdir(stagingDir, { recursive: true });
+  await mkdir(config.screenshotsDir, { recursive: true });
 
-  let baseBmpPath: string | null = null;
-  let previousPng: string | null = null;
+  // Per-window state: base BMP + last PNG for change detection
+  const windowState = new Map<number, { baseBmp: string; previousPng: string; info: WindowInfo }>();
+  let lastWindowId = 0;
 
   while (!signal.aborted) {
     try {
-      // Capture to staging, not inbox
-      const currentPng = await takeScreenshot(stagingDir);
+      const win = getFrontWindow();
+      const windowSwitched = win.windowId !== 0 && win.windowId !== lastWindowId && lastWindowId !== 0;
 
-      if (!baseBmpPath) {
-        // First screenshot — becomes the base
-        baseBmpPath = await createBaseBmp(currentPng);
-        previousPng = currentPng;
+      // Capture the active window (or full screen if windowId is 0)
+      const currentPng = await takeScreenshot(stagingDir, win.windowId || undefined);
+
+      if (windowSwitched) {
+        // Window changed — emit the previous window's last screenshot
+        const prev = windowState.get(lastWindowId);
+        if (prev) {
+          const filename = `screenshot-${Date.now()}.png`;
+          await rename(prev.previousPng, join(config.screenshotsDir, filename));
+          await writeWindowInfo(join(config.screenshotsDir, filename), prev.info);
+          console.log(`📸 Window switch (${prev.info.app} → ${win.app}) — saved ${prev.info.app}`);
+          await unlink(prev.baseBmp).catch(() => {});
+          windowState.delete(lastWindowId);
+        }
+      }
+
+      lastWindowId = win.windowId || lastWindowId;
+      const state = windowState.get(lastWindowId);
+
+      if (!state) {
+        // First time seeing this window
+        const baseBmp = await createBaseBmp(currentPng);
+        windowState.set(lastWindowId, { baseBmp, previousPng: currentPng, info: win });
       } else {
-        const { changed, diff } = await hasChangedEnough(currentPng, baseBmpPath);
+        const { changed, diff } = await hasChangedEnough(currentPng, state.baseBmp);
         if (changed) {
-          // Screen changed — emit the previous (stable state before the change)
-          if (previousPng) {
-            const filename = `screenshot-${Date.now()}.png`;
-            await mkdir(config.screenshotsDir, { recursive: true });
-            await rename(previousPng, join(config.screenshotsDir, filename));
-            console.log(`📸 Screen changed (${(diff * 100).toFixed(1)}% diff) — saved to inbox`);
-          }
-          // Current becomes the new base
-          await unlink(baseBmpPath).catch(() => {});
-          baseBmpPath = await createBaseBmp(currentPng);
-          previousPng = currentPng;
+          // Content changed within the same window — emit previous stable state
+          const filename = `screenshot-${Date.now()}.png`;
+          await rename(state.previousPng, join(config.screenshotsDir, filename));
+          await writeWindowInfo(join(config.screenshotsDir, filename), state.info);
+          console.log(`📸 Content changed in ${win.app} (${(diff * 100).toFixed(1)}% diff)`);
+
+          await unlink(state.baseBmp).catch(() => {});
+          const baseBmp = await createBaseBmp(currentPng);
+          windowState.set(lastWindowId, { baseBmp, previousPng: currentPng, info: win });
         } else {
-          // No significant change — replace previous with current
-          if (previousPng && previousPng !== currentPng) {
-            await unlink(previousPng).catch(() => {});
+          // No significant change — update previous
+          if (state.previousPng !== currentPng) {
+            await unlink(state.previousPng).catch(() => {});
           }
-          previousPng = currentPng;
+          state.previousPng = currentPng;
+          state.info = win; // title/url may have changed
         }
       }
     } catch (err) {
@@ -161,9 +185,11 @@ async function screenshotLoop(config: Config, signal: AbortSignal): Promise<void
     await sleep(config.intervalSecs * 1000);
   }
 
-  // Cleanup
-  if (baseBmpPath) await unlink(baseBmpPath).catch(() => {});
-  if (previousPng) await unlink(previousPng).catch(() => {});
+  // Cleanup all window state
+  for (const state of windowState.values()) {
+    await unlink(state.baseBmp).catch(() => {});
+    await unlink(state.previousPng).catch(() => {});
+  }
 }
 
 /**
@@ -191,10 +217,9 @@ async function extractLoop(config: Config, agent: AgentHandle, signal: AbortSign
         const skipped = toProcess.slice(0, -5);
         toProcess = toProcess.slice(-5);
         for (const f of skipped) {
-          await rename(
-            join(config.screenshotsDir, f),
-            join(config.processedDir, f),
-          );
+          await rename(join(config.screenshotsDir, f), join(config.processedDir, f));
+          const jf = f.replace(".png", ".json");
+          await rename(join(config.screenshotsDir, jf), join(config.processedDir, jf)).catch(() => {});
         }
         console.log(`⏩ Skipped ${skipped.length} old screenshots, processing latest ${toProcess.length}`);
       }
@@ -205,11 +230,13 @@ async function extractLoop(config: Config, agent: AgentHandle, signal: AbortSign
         const pngPath = join(config.screenshotsDir, file);
 
         const base64 = await pngToJpegBase64(pngPath);
+        const windowInfo = await readWindowInfo(pngPath);
         const tsMatch = file.match(/screenshot-(\d+)\./);
         const timestamp = tsMatch ? new Date(parseInt(tsMatch[1]!, 10)) : new Date();
 
+        const label = windowInfo ? `${windowInfo.app} — ${windowInfo.title || "(untitled)"}` : file;
         console.log(`\n${"─".repeat(60)}`);
-        console.log(`👁️  Extracting: ${file} (${timestamp.toLocaleTimeString()})`);
+        console.log(`👁️  ${label} (${timestamp.toLocaleTimeString()})`);
         console.log(`${"─".repeat(60)}`);
 
         const description = await agent.extractScreenshot({
@@ -217,11 +244,14 @@ async function extractLoop(config: Config, agent: AgentHandle, signal: AbortSign
           timestamp,
           base64,
           mimeType: "image/jpeg",
+          windowInfo: windowInfo ?? undefined,
         });
 
         await mkdir(config.inboxDir, { recursive: true });
-        // Move PNG to inbox regardless
+        // Move PNG + JSON sidecar to inbox
         await rename(pngPath, join(config.inboxDir, file));
+        const jsonFile = file.replace(".png", ".json");
+        await rename(join(config.screenshotsDir, jsonFile), join(config.inboxDir, jsonFile)).catch(() => {});
 
         if (description) {
           await writeFile(join(config.inboxDir, file.replace(".png", ".txt")), description, "utf-8");
