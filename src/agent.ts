@@ -144,7 +144,7 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
 
   return {
     async sendScreenshots(screenshots: Screenshot[]): Promise<string> {
-      const sessionId = await createSession("smart");
+      const sessionId = await createSession("fast");
 
       const wikiSummary = await getWikiSummary(config.wikiDir);
       const recentLog = await getRecentLog(config.wikiDir);
