@@ -120,16 +120,28 @@ async function getNoteContent(name: string): Promise<string> {
   return runAppleScript(script);
 }
 
+let notesDisabled = false;
+
 /**
  * Check Apple Notes for changes since last check.
  * Returns an array of notes that have been modified or created since
  * they were last seen, with their full plaintext content.
+ *
+ * If Notes.app is unavailable (not macOS, or AppleScript fails),
+ * disables itself for the rest of the session to avoid log spam.
  */
 export async function getChangedNotes(rootDir: string): Promise<NoteSnapshot[]> {
-  if (process.platform !== "darwin") return [];
+  if (notesDisabled || process.platform !== "darwin") return [];
 
   const state = await loadState(rootDir);
-  const metas = await getRecentNoteMeta(50);
+  let metas: Array<{ name: string; modifiedAt: Date }>;
+  try {
+    metas = await getRecentNoteMeta(50);
+  } catch (err) {
+    console.log(`📝 Apple Notes unavailable — disabling for this session`);
+    notesDisabled = true;
+    return [];
+  }
   const changed: NoteSnapshot[] = [];
 
   for (const meta of metas) {
