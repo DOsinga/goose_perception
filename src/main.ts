@@ -220,15 +220,28 @@ async function extractLoop(config: Config, agent: AgentHandle, signal: AbortSign
   agent.shutdown();
 }
 
-function logUsage(agent: AgentHandle) {
+async function logUsage(agent: AgentHandle, rootDir: string) {
   const u = agent.getUsage();
   const fmt = (n: number) => n.toLocaleString();
   const cost = u.total.cost > 0 ? ` | 💰 $${u.total.cost.toFixed(4)}` : "";
-  console.log(
+  const line =
     `📊 Tokens — fast: ${fmt(u.fast.inputTokens)}in/${fmt(u.fast.outputTokens)}out` +
     ` | smart: ${fmt(u.smart.inputTokens)}in/${fmt(u.smart.outputTokens)}out` +
-    ` | total: ${fmt(u.total.inputTokens + u.total.outputTokens)}${cost}`
-  );
+    ` | total: ${fmt(u.total.inputTokens + u.total.outputTokens)}${cost}`;
+  console.log(line);
+
+  // Persist to file so usage can be checked externally
+  const usageData = {
+    timestamp: new Date().toISOString(),
+    fast: u.fast,
+    smart: u.smart,
+    total: u.total,
+  };
+  await writeFile(
+    join(rootDir, "usage.json"),
+    JSON.stringify(usageData, null, 2) + "\n",
+    "utf-8",
+  ).catch(() => {});
 }
 
 /**
@@ -261,7 +274,7 @@ async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal)
             await agent.sendExtractions([], notesCtx);
             await recordChangedFiles(config.rootDir, config.wikiDir, startTime);
             console.log(`\n✅ Notes update complete`);
-            logUsage(agent);
+            logUsage(agent, config.rootDir);
             continue;
           }
         } catch (err) {
@@ -280,7 +293,7 @@ async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal)
           await markLinted(config.rootDir, lintTarget);
           await recordChangedFiles(config.rootDir, config.wikiDir, startTime);
           console.log(`\n✅ Lint complete: ${lintTarget}`);
-          logUsage(agent);
+          logUsage(agent, config.rootDir);
         }
 
         await sleep(IDLE_WAIT_MS);
@@ -351,7 +364,7 @@ async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal)
       }
 
       console.log(`\n✅ Wiki update complete — processed ${extractions.length} extraction(s)`);
-      logUsage(agent);
+      logUsage(agent, config.rootDir);
       consecutiveErrors = 0;
     } catch (err) {
       consecutiveErrors++;
