@@ -345,7 +345,7 @@ async function main() {
     restoreTerminal();
     const logFile = join(config.rootDir, "last-session.log");
     try {
-      writeFileSync(logFile, logLines.join(""));
+      writeFileSync(logFile, logLines.map(stripAnsi).join(""));
     } catch { /* best effort */ }
     originalConsoleLog(`\n👋 Shutting down — log written to ${logFile}`);
     abortController.abort();
