@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +38,13 @@ try {
       `Install goose on PATH or use --server.`,
   );
   process.exit(0);
+}
+
+// Ensure the binary is executable (npm doesn't always preserve permissions)
+try {
+  chmodSync(binaryPath, 0o755);
+} catch {
+  // may fail on Windows, that's fine
 }
 
 const outDir = join(__dirname, "..");

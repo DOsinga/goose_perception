@@ -36,10 +36,25 @@ export interface ModelInfo {
   name: string;
 }
 
+export interface Extraction {
+  filename: string;
+  timestamp: Date;
+  text: string;
+}
+
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cost: number;       // cumulative USD
+  currency: string;
+}
+
 export interface AgentHandle {
   extractScreenshot(screenshot: Screenshot): Promise<string>;
+  sendExtractions(extractions: Extraction[], notesContext?: string): Promise<string>;
   sendScreenshots(screenshots: Screenshot[]): Promise<string>;
   sendLint(file: string): Promise<string>;
+  getUsage(): { fast: TokenUsage; smart: TokenUsage; total: TokenUsage };
   listProviders(): Promise<ProviderInfo[]>;
   listModels(provider: string): Promise<{ models: ModelInfo[]; current: string }>;
   shutdown(): void;
@@ -80,6 +95,13 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
 
   const streamBuffer: string[] = [];
 
+  // Token usage tracking
+  const usage = {
+    fast: { inputTokens: 0, outputTokens: 0, cost: 0, currency: "USD" },
+    smart: { inputTokens: 0, outputTokens: 0, cost: 0, currency: "USD" },
+  };
+  let currentSessionKind: "fast" | "smart" = "fast";
+
   const client = new GooseClient(
     () => ({
       sessionUpdate: async (params: SessionNotification) => {
@@ -96,6 +118,12 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
         } else if (update.sessionUpdate === "tool_call_update") {
           if (update.status) {
             console.log(`  🔧 ${update.title ?? "tool"} [${update.status}]`);
+          }
+        } else if (update.sessionUpdate === "usage_update") {
+          const u = update as any;
+          if (u.cost?.amount != null) {
+            usage[currentSessionKind].cost = u.cost.amount;
+            usage[currentSessionKind].currency = u.cost.currency ?? "USD";
           }
         }
       },
@@ -133,7 +161,16 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
 
   let lastExtraction = "";
 
+  function trackPromptUsage(kind: "fast" | "smart", response: any) {
+    const u = response?.usage;
+    if (u) {
+      usage[kind].inputTokens += u.inputTokens ?? 0;
+      usage[kind].outputTokens += u.outputTokens ?? 0;
+    }
+  }
+
   async function createSession(kind: "fast" | "smart"): Promise<string> {
+    currentSessionKind = kind;
     const provider = kind === "fast" ? config.fastProvider : config.smartProvider;
     const model = kind === "fast" ? config.fastModel : config.smartModel;
 
@@ -166,13 +203,14 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
         ? `${EXTRACT_PROMPT}\n\nYour previous description was:\n${lastExtraction}`
         : EXTRACT_PROMPT;
 
-      await client.prompt({
+      const response = await client.prompt({
         sessionId,
         prompt: [
           { type: "text", text: prompt },
           { type: "image", data: screenshot.base64, mimeType: screenshot.mimeType },
         ] as ContentBlock[],
       });
+      trackPromptUsage("fast", response);
 
       const result = streamBuffer.join("").trim();
       if (result.includes("NO CHANGES") || result.includes("NO REAL CHANGES")) {
@@ -180,6 +218,44 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
       }
       lastExtraction = result;
       return result;
+    },
+
+    async sendExtractions(extractions: Extraction[], notesContext?: string): Promise<string> {
+      const sessionId = await createSession("smart");
+
+      const wikiSummary = await getWikiSummary(config.wikiDir);
+      const recentLog = await getRecentLog(config.wikiDir);
+      const systemPrompt = await loadSystemPrompt(config.rootDir, config.wikiDir, wikiSummary, recentLog);
+
+      let body = "";
+
+      if (extractions.length > 0) {
+        body += `${extractions.length} screen observation(s) to process:\n\n`;
+        for (const ext of extractions) {
+          body += `--- [${ext.timestamp.toLocaleTimeString()}] ---\n${ext.text}\n\n`;
+        }
+      }
+
+      if (notesContext) {
+        body += "\n" + notesContext + "\n";
+        body += "Apple Notes are a primary source of the user's thoughts, plans, and context. " +
+          "Integrate relevant information into the wiki — update person pages, project pages, " +
+          "or create new ones as appropriate. Note titles often hint at the topic.\n\n";
+      }
+
+      body += "Update the wiki based on these observations. Brief summary of what you observed and changed.";
+
+      streamBuffer.length = 0;
+
+      const extractionsResp = await client.prompt({
+        sessionId,
+        prompt: [
+          { type: "text", text: systemPrompt + "\n\n---\n\n" + body },
+        ] as ContentBlock[],
+      });
+      trackPromptUsage("smart", extractionsResp);
+
+      return streamBuffer.join("");
     },
 
     async sendScreenshots(screenshots: Screenshot[]): Promise<string> {
@@ -196,10 +272,11 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
 
       streamBuffer.length = 0;
 
-      await client.prompt({
+      const screenshotsResp = await client.prompt({
         sessionId,
         prompt: blocks as ContentBlock[],
       });
+      trackPromptUsage("smart", screenshotsResp);
 
       return streamBuffer.join("");
     },
@@ -212,12 +289,26 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
 
       streamBuffer.length = 0;
 
-      await client.prompt({
+      const lintResp = await client.prompt({
         sessionId,
         prompt: [{ type: "text", text: lintPrompt } as ContentBlock],
       });
+      trackPromptUsage("smart", lintResp);
 
       return streamBuffer.join("");
+    },
+
+    getUsage() {
+      return {
+        fast: { ...usage.fast },
+        smart: { ...usage.smart },
+        total: {
+          inputTokens: usage.fast.inputTokens + usage.smart.inputTokens,
+          outputTokens: usage.fast.outputTokens + usage.smart.outputTokens,
+          cost: usage.fast.cost + usage.smart.cost,
+          currency: usage.smart.currency || usage.fast.currency || "USD",
+        },
+      };
     },
 
     async listProviders(): Promise<ProviderInfo[]> {
