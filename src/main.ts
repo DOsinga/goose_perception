@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 
 import { resolve, join } from "node:path";
-import { mkdir, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { parseArgs } from "node:util";
 import { takeScreenshot, flushInbox, hasChangedEnough, createBaseBmp, pngToJpegBase64 } from "./screenshot.js";
-import { connectAgent, type AgentHandle } from "./agent.js";
+import { connectAgent, type AgentHandle, type Extraction } from "./agent.js";
 import { startBrowser, setBrowserAgent } from "./browser.js";
 import { ensurePromptFiles } from "./prompt.js";
-import { seedLintQueue } from "./lint.js";
+import { seedLintQueue, recordChangedFiles, pickLintTarget, markLinted } from "./lint.js";
 import { loadSettings } from "./settings.js";
+import { getChangedNotes, formatNotesForAgent } from "./notes.js";
 
 const DEFAULT_INTERVAL_SECS = 5;
 const DEFAULT_BATCH_SIZE = 3;
@@ -219,6 +220,139 @@ async function extractLoop(config: Config, agent: AgentHandle, signal: AbortSign
   agent.shutdown();
 }
 
+/**
+ * Wiki update loop: pick up .txt extractions from inbox, batch them,
+ * send to the smart model for wiki updates, then lint on idle.
+ */
+async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal): Promise<void> {
+  const BATCH_WAIT_MS = 10_000;  // wait 10s for a batch to accumulate
+  const IDLE_WAIT_MS = 15_000;   // wait 15s between wiki checks when idle
+  let consecutiveErrors = 0;
+
+  while (!signal.aborted) {
+    try {
+      const files = await readdir(config.inboxDir).catch(() => [] as string[]);
+      const txts = files
+        .filter((f) => f.startsWith("screenshot-") && f.endsWith(".txt"))
+        .sort();
+
+      if (txts.length === 0) {
+        // No extractions pending — check Apple Notes for changes
+        try {
+          const changedNotes = await getChangedNotes(config.rootDir);
+          if (changedNotes.length > 0) {
+            const notesCtx = formatNotesForAgent(changedNotes);
+            console.log(`\n${"═".repeat(60)}`);
+            console.log(`📝 Notes only: ${changedNotes.map(n => n.name).join(", ")}`);
+            console.log(`${"═".repeat(60)}`);
+
+            const startTime = Date.now();
+            await agent.sendExtractions([], notesCtx);
+            await recordChangedFiles(config.rootDir, config.wikiDir, startTime);
+            console.log(`\n✅ Notes update complete`);
+            continue;
+          }
+        } catch (err) {
+          console.error(`📝 Notes check failed:`, err instanceof Error ? err.message : err);
+        }
+
+        // No notes changes either — try linting
+        const lintTarget = await pickLintTarget(config.rootDir);
+        if (lintTarget) {
+          console.log(`\n${"─".repeat(60)}`);
+          console.log(`🧹 Linting: ${lintTarget}`);
+          console.log(`${"─".repeat(60)}`);
+
+          const startTime = Date.now();
+          await agent.sendLint(lintTarget);
+          await markLinted(config.rootDir, lintTarget);
+          await recordChangedFiles(config.rootDir, config.wikiDir, startTime);
+          console.log(`\n✅ Lint complete: ${lintTarget}`);
+        }
+
+        await sleep(IDLE_WAIT_MS);
+        continue;
+      }
+
+      // Wait a bit for more extractions to arrive before batching
+      if (txts.length < config.batchSize) {
+        await sleep(BATCH_WAIT_MS);
+        // Re-read to pick up any new ones
+        const updated = await readdir(config.inboxDir).catch(() => [] as string[]);
+        const updatedTxts = updated
+          .filter((f) => f.startsWith("screenshot-") && f.endsWith(".txt"))
+          .sort();
+        // Use whatever we have now
+        if (updatedTxts.length > 0) {
+          txts.length = 0;
+          txts.push(...updatedTxts);
+        }
+      }
+
+      // Build extraction batch
+      const extractions: Extraction[] = [];
+      const toCleanup: string[] = [];
+
+      for (const txtFile of txts) {
+        const txtPath = join(config.inboxDir, txtFile);
+        const pngFile = txtFile.replace(".txt", ".png");
+        const pngPath = join(config.inboxDir, pngFile);
+
+        const text = await readFile(txtPath, "utf-8");
+        const tsMatch = txtFile.match(/screenshot-(\d+)\./);
+        const timestamp = tsMatch ? new Date(parseInt(tsMatch[1]!, 10)) : new Date();
+
+        extractions.push({ filename: txtFile, timestamp, text });
+        toCleanup.push(txtPath);
+        toCleanup.push(pngPath); // clean up the PNG too
+      }
+
+      // Check Apple Notes for changes
+      let notesContext = "";
+      try {
+        const changedNotes = await getChangedNotes(config.rootDir);
+        if (changedNotes.length > 0) {
+          notesContext = formatNotesForAgent(changedNotes);
+          console.log(`📝 ${changedNotes.length} Apple Note(s) changed: ${changedNotes.map(n => n.name).join(", ")}`);
+        }
+      } catch (err) {
+        console.error(`📝 Notes check failed:`, err instanceof Error ? err.message : err);
+      }
+
+      console.log(`\n${"═".repeat(60)}`);
+      console.log(`🧠 Wiki update: ${extractions.length} extraction(s)${notesContext ? " + notes" : ""}`);
+      console.log(`${"═".repeat(60)}`);
+
+      const startTime = Date.now();
+      await agent.sendExtractions(extractions, notesContext || undefined);
+
+      // Track wiki changes for lint queue
+      await recordChangedFiles(config.rootDir, config.wikiDir, startTime);
+
+      // Move processed files out
+      for (const filePath of toCleanup) {
+        const filename = filePath.split("/").pop()!;
+        await rename(filePath, join(config.processedDir, filename)).catch(() =>
+          unlink(filePath).catch(() => {})
+        );
+      }
+
+      console.log(`\n✅ Wiki update complete — processed ${extractions.length} extraction(s)`);
+      consecutiveErrors = 0;
+    } catch (err) {
+      consecutiveErrors++;
+      console.error(`❌ Wiki update error:`, err instanceof Error ? err.message : err);
+
+      if (consecutiveErrors > 5) {
+        console.error("⏳ Too many errors, backing off 60s…");
+        await sleep(60_000);
+      } else {
+        await sleep(10_000);
+      }
+    }
+  }
+}
+
 async function main() {
   const config = parseConfig();
 
@@ -298,6 +432,7 @@ async function main() {
 
   await Promise.all([
     extractLoop(config, agent, signal),
+    wikiLoop(config, agent, signal),
     sleep(2000).then(() => screenshotLoop(config, signal)),
   ]);
 }

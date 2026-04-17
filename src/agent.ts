@@ -36,8 +36,15 @@ export interface ModelInfo {
   name: string;
 }
 
+export interface Extraction {
+  filename: string;
+  timestamp: Date;
+  text: string;
+}
+
 export interface AgentHandle {
   extractScreenshot(screenshot: Screenshot): Promise<string>;
+  sendExtractions(extractions: Extraction[], notesContext?: string): Promise<string>;
   sendScreenshots(screenshots: Screenshot[]): Promise<string>;
   sendLint(file: string): Promise<string>;
   listProviders(): Promise<ProviderInfo[]>;
@@ -180,6 +187,43 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
       }
       lastExtraction = result;
       return result;
+    },
+
+    async sendExtractions(extractions: Extraction[], notesContext?: string): Promise<string> {
+      const sessionId = await createSession("smart");
+
+      const wikiSummary = await getWikiSummary(config.wikiDir);
+      const recentLog = await getRecentLog(config.wikiDir);
+      const systemPrompt = await loadSystemPrompt(config.rootDir, config.wikiDir, wikiSummary, recentLog);
+
+      let body = "";
+
+      if (extractions.length > 0) {
+        body += `${extractions.length} screen observation(s) to process:\n\n`;
+        for (const ext of extractions) {
+          body += `--- [${ext.timestamp.toLocaleTimeString()}] ---\n${ext.text}\n\n`;
+        }
+      }
+
+      if (notesContext) {
+        body += "\n" + notesContext + "\n";
+        body += "Apple Notes are a primary source of the user's thoughts, plans, and context. " +
+          "Integrate relevant information into the wiki — update person pages, project pages, " +
+          "or create new ones as appropriate. Note titles often hint at the topic.\n\n";
+      }
+
+      body += "Update the wiki based on these observations. Brief summary of what you observed and changed.";
+
+      streamBuffer.length = 0;
+
+      await client.prompt({
+        sessionId,
+        prompt: [
+          { type: "text", text: systemPrompt + "\n\n---\n\n" + body },
+        ] as ContentBlock[],
+      });
+
+      return streamBuffer.join("");
     },
 
     async sendScreenshots(screenshots: Screenshot[]): Promise<string> {
