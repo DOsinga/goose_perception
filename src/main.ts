@@ -248,10 +248,29 @@ async function logUsage(agent: AgentHandle, rootDir: string) {
  * Wiki update loop: pick up .txt extractions from inbox, batch them,
  * send to the smart model for wiki updates, then lint on idle.
  */
+/**
+ * Compute similarity between two texts using word-level Jaccard index.
+ * Returns 0.0 (completely different) to 1.0 (identical words).
+ */
+function textSimilarity(a: string, b: string): number {
+  const wordsA = new Set(a.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+  const wordsB = new Set(b.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+  if (wordsA.size === 0 && wordsB.size === 0) return 1.0;
+  if (wordsA.size === 0 || wordsB.size === 0) return 0.0;
+  let intersection = 0;
+  for (const w of wordsA) {
+    if (wordsB.has(w)) intersection++;
+  }
+  return intersection / (wordsA.size + wordsB.size - intersection);
+}
+
+const SIMILARITY_THRESHOLD = 0.7; // skip if 70%+ similar to last batch
+
 async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal): Promise<void> {
   const BATCH_WAIT_MS = 10_000;  // wait 10s for a batch to accumulate
   const IDLE_WAIT_MS = 15_000;   // wait 15s between wiki checks when idle
   let consecutiveErrors = 0;
+  let lastBatchText = "";
 
   while (!signal.aborted) {
     try {
@@ -333,6 +352,10 @@ async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal)
         toCleanup.push(pngPath); // clean up the PNG too
       }
 
+      // Check if this batch is too similar to the last one we sent
+      const batchText = extractions.map(e => e.text).join("\n");
+      const similarity = lastBatchText ? textSimilarity(batchText, lastBatchText) : 0;
+
       // Check Apple Notes for changes
       let notesContext = "";
       try {
@@ -345,12 +368,26 @@ async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal)
         console.error(`📝 Notes check failed:`, err instanceof Error ? err.message : err);
       }
 
+      // Skip smart model if content is too similar and no notes changed
+      if (similarity >= SIMILARITY_THRESHOLD && !notesContext) {
+        console.log(`⏭️  Skipping wiki update — ${(similarity * 100).toFixed(0)}% similar to last batch`);
+        // Still clean up the files
+        for (const filePath of toCleanup) {
+          const filename = filePath.split("/").pop()!;
+          await rename(filePath, join(config.processedDir, filename)).catch(() =>
+            unlink(filePath).catch(() => {})
+          );
+        }
+        continue;
+      }
+
       console.log(`\n${"═".repeat(60)}`);
-      console.log(`🧠 Wiki update: ${extractions.length} extraction(s)${notesContext ? " + notes" : ""}`);
+      console.log(`🧠 Wiki update: ${extractions.length} extraction(s)${notesContext ? " + notes" : ""}${lastBatchText ? ` (${(similarity * 100).toFixed(0)}% similar)` : ""}`);
       console.log(`${"═".repeat(60)}`);
 
       const startTime = Date.now();
       await agent.sendExtractions(extractions, notesContext || undefined);
+      lastBatchText = batchText;
 
       // Track wiki changes for lint queue
       await recordChangedFiles(config.rootDir, config.wikiDir, startTime);
