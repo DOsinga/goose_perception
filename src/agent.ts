@@ -37,7 +37,6 @@ export interface ModelInfo {
 }
 
 export interface AgentHandle {
-  extractScreenshot(screenshot: Screenshot): Promise<string>;
   sendScreenshots(screenshots: Screenshot[]): Promise<string>;
   sendLint(file: string): Promise<string>;
   listProviders(): Promise<ProviderInfo[]>;
@@ -120,19 +119,6 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
     clientCapabilities: {},
   });
 
-  const EXTRACT_PROMPT =
-    "Transcribe all visible text on this screen. Group it by app or window, " +
-    "and attribute messages to the person who sent them. Include:\n" +
-    "- App/window name and any URL or file path visible\n" +
-    "- All readable text: messages, code, documents, notifications\n" +
-    "- For chat apps: who said what\n" +
-    "- Any error messages, toasts, or popups\n" +
-    "Skip UI chrome (menus, buttons) unless they convey information.\n\n" +
-    "If the screen is essentially the same as your previous transcription, " +
-    "reply with exactly: NO CHANGES";
-
-  let lastExtraction = "";
-
   async function createSession(kind: "fast" | "smart"): Promise<string> {
     const provider = kind === "fast" ? config.fastProvider : config.smartProvider;
     const model = kind === "fast" ? config.fastModel : config.smartModel;
@@ -157,35 +143,6 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
   }
 
   return {
-    async extractScreenshot(screenshot: Screenshot): Promise<string> {
-      const sessionId = await createSession("fast");
-
-      streamBuffer.length = 0;
-
-      const win = screenshot.windowInfo;
-      const context = win
-        ? `Active window: ${win.app}${win.title ? ` — ${win.title}` : ""}${win.url ? `\nURL: ${win.url}` : ""}\n\n`
-        : "";
-
-      const prompt = context + EXTRACT_PROMPT +
-        (lastExtraction ? `\n\nYour previous transcription was:\n${lastExtraction}` : "");
-
-      await client.prompt({
-        sessionId,
-        prompt: [
-          { type: "text", text: prompt },
-          { type: "image", data: screenshot.base64, mimeType: screenshot.mimeType },
-        ] as ContentBlock[],
-      });
-
-      const result = streamBuffer.join("").trim();
-      if (result.includes("NO CHANGES") || result.includes("NO REAL CHANGES")) {
-        return "";
-      }
-      lastExtraction = result;
-      return result;
-    },
-
     async sendScreenshots(screenshots: Screenshot[]): Promise<string> {
       const sessionId = await createSession("smart");
 

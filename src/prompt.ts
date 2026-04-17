@@ -239,9 +239,13 @@ export function buildPromptBlocks(screenshots: Screenshot[]): Array<
   });
 
   for (const screenshot of screenshots) {
+    const win = screenshot.windowInfo;
+    const label = win
+      ? `${win.app}${win.title ? ` — ${win.title}` : ""}`
+      : "unknown window";
     blocks.push({
       type: "text" as const,
-      text: `\n[${screenshot.timestamp.toLocaleTimeString()}]`,
+      text: `\n[${screenshot.timestamp.toLocaleTimeString()}] ${label}`,
     });
     blocks.push({
       type: "image" as const,

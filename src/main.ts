@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { resolve, join } from "node:path";
-import { mkdir, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rename, unlink } from "node:fs/promises";
 import { writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
@@ -14,7 +14,7 @@ import {
 import { connectAgent, type AgentHandle } from "./agent.js";
 import { startBrowser, setBrowserAgent } from "./browser.js";
 import { ensurePromptFiles } from "./prompt.js";
-import { seedLintQueue } from "./lint.js";
+import { seedLintQueue, recordChangedFiles, pickLintTarget, markLinted } from "./lint.js";
 import { loadSettings } from "./settings.js";
 
 // Capture all output to a log file
@@ -41,7 +41,6 @@ interface Config {
   rootDir: string;
   wikiDir: string;
   screenshotsDir: string;
-  inboxDir: string;
   processedDir: string;
   serverUrl?: string;
 }
@@ -81,7 +80,6 @@ Options:
     rootDir,
     wikiDir: join(rootDir, "wiki"),
     screenshotsDir: join(rootDir, "screenshots"),
-    inboxDir: join(rootDir, "inbox"),
     processedDir: join(rootDir, "processed"),
     serverUrl: values.server,
   };
@@ -100,33 +98,27 @@ function printBanner(config: Config) {
   const rows = process.stdout.rows ?? 24;
   const cols = process.stdout.columns ?? 80;
 
-  // OSC 8 clickable link
   const link = `\x1b]8;;${url}\x1b\\${url}\x1b]8;;\x1b\\`;
 
-  // Clear screen, move to top
   process.stdout.write("\x1b[2J\x1b[H");
-
-  // White text on dark blue background for the bar
   const text = `  goose perception  ${url}  ${config.wikiDir}  `;
   const pad = Math.max(0, cols - stripAnsi(text).length);
   process.stdout.write(`\x1b[97;44m  goose perception  ${link}  ${config.wikiDir}${" ".repeat(pad)}\x1b[0m\n`);
-
-  // Set scroll region below banner (line 2 onward)
   process.stdout.write(`\x1b[2;${rows}r`);
   process.stdout.write(`\x1b[2;1H`);
 }
 
 function restoreTerminal() {
-  // Reset scroll region to full terminal
   process.stdout.write("\x1b[r");
 }
+
+// ── Screenshot loop ──
 
 async function screenshotLoop(config: Config, signal: AbortSignal): Promise<void> {
   const stagingDir = join(config.rootDir, "staging");
   await mkdir(stagingDir, { recursive: true });
   await mkdir(config.screenshotsDir, { recursive: true });
 
-  // Per-window state: base BMP + last PNG for change detection
   const windowState = new Map<number, { baseBmp: string; previousPng: string; info: WindowInfo }>();
   let lastWindowId = 0;
 
@@ -135,17 +127,15 @@ async function screenshotLoop(config: Config, signal: AbortSignal): Promise<void
       const win = getFrontWindow();
       const windowSwitched = win.windowId !== 0 && win.windowId !== lastWindowId && lastWindowId !== 0;
 
-      // Capture the active window (or full screen if windowId is 0)
       const currentPng = await takeScreenshot(stagingDir, win.windowId || undefined);
 
       if (windowSwitched) {
-        // Window changed — emit the previous window's last screenshot
         const prev = windowState.get(lastWindowId);
         if (prev) {
           const filename = `screenshot-${Date.now()}.png`;
           await rename(prev.previousPng, join(config.screenshotsDir, filename));
           await writeWindowInfo(join(config.screenshotsDir, filename), prev.info);
-          console.log(`📸 Window switch (${prev.info.app} → ${win.app}) — saved ${prev.info.app}`);
+          console.log(`📸 Window switch (${prev.info.app} → ${win.app})`);
           await unlink(prev.baseBmp).catch(() => {});
           windowState.delete(lastWindowId);
         }
@@ -155,13 +145,11 @@ async function screenshotLoop(config: Config, signal: AbortSignal): Promise<void
       const state = windowState.get(lastWindowId);
 
       if (!state) {
-        // First time seeing this window
         const baseBmp = await createBaseBmp(currentPng);
         windowState.set(lastWindowId, { baseBmp, previousPng: currentPng, info: win });
       } else {
         const { changed, diff } = await hasChangedEnough(currentPng, state.baseBmp);
         if (changed) {
-          // Content changed within the same window — emit previous stable state
           const filename = `screenshot-${Date.now()}.png`;
           await rename(state.previousPng, join(config.screenshotsDir, filename));
           await writeWindowInfo(join(config.screenshotsDir, filename), state.info);
@@ -171,12 +159,11 @@ async function screenshotLoop(config: Config, signal: AbortSignal): Promise<void
           const baseBmp = await createBaseBmp(currentPng);
           windowState.set(lastWindowId, { baseBmp, previousPng: currentPng, info: win });
         } else {
-          // No significant change — update previous
           if (state.previousPng !== currentPng) {
             await unlink(state.previousPng).catch(() => {});
           }
           state.previousPng = currentPng;
-          state.info = win; // title/url may have changed
+          state.info = win;
         }
       }
     } catch (err) {
@@ -185,18 +172,15 @@ async function screenshotLoop(config: Config, signal: AbortSignal): Promise<void
     await sleep(config.intervalSecs * 1000);
   }
 
-  // Cleanup all window state
   for (const state of windowState.values()) {
     await unlink(state.baseBmp).catch(() => {});
     await unlink(state.previousPng).catch(() => {});
   }
 }
 
-/**
- * Extract loop: pick up PNGs from inbox, send each to the fast model
- * for description, save the text alongside the image.
- */
-async function extractLoop(config: Config, agent: AgentHandle, signal: AbortSignal): Promise<void> {
+// ── Agent loop ──
+
+async function agentLoop(config: Config, agent: AgentHandle, signal: AbortSignal): Promise<void> {
   let consecutiveErrors = 0;
 
   while (!signal.aborted) {
@@ -206,66 +190,76 @@ async function extractLoop(config: Config, agent: AgentHandle, signal: AbortSign
         .filter((f) => f.startsWith("screenshot-") && f.endsWith(".png"))
         .sort();
 
-      if (pngs.length === 0) {
+      if (pngs.length < config.batchSize) {
+        // Not enough screenshots yet — try linting if idle
+        await tryLint(config, agent);
         await sleep(3000);
         continue;
       }
 
-      // If we're falling behind, skip to the most recent 5
+      // If falling behind, skip to the most recent
       let toProcess = pngs;
-      if (toProcess.length > 5) {
-        const skipped = toProcess.slice(0, -5);
-        toProcess = toProcess.slice(-5);
+      if (toProcess.length > config.batchSize * 2) {
+        const skipped = toProcess.slice(0, -config.batchSize);
+        toProcess = toProcess.slice(-config.batchSize);
         for (const f of skipped) {
           await rename(join(config.screenshotsDir, f), join(config.processedDir, f));
-          const jf = f.replace(".png", ".json");
-          await rename(join(config.screenshotsDir, jf), join(config.processedDir, jf)).catch(() => {});
+          await rename(
+            join(config.screenshotsDir, f.replace(".png", ".json")),
+            join(config.processedDir, f.replace(".png", ".json")),
+          ).catch(() => {});
         }
-        console.log(`⏩ Skipped ${skipped.length} old screenshots, processing latest ${toProcess.length}`);
+        console.log(`⏩ Skipped ${skipped.length} old, processing latest ${toProcess.length}`);
       }
 
-      for (const file of toProcess) {
-        if (signal.aborted) break;
+      // Sample: first, middle, last
+      const sampled = [
+        toProcess[0]!,
+        toProcess[Math.floor(toProcess.length / 2)]!,
+        toProcess[toProcess.length - 1]!,
+      ].filter((v, i, a) => a.indexOf(v) === i); // deduplicate
 
-        const pngPath = join(config.screenshotsDir, file);
+      // Build screenshots with window info
+      const screenshots = await Promise.all(
+        sampled.map(async (file) => {
+          const pngPath = join(config.screenshotsDir, file);
+          const base64 = await pngToJpegBase64(pngPath);
+          const windowInfo = await readWindowInfo(pngPath);
+          const tsMatch = file.match(/screenshot-(\d+)\./);
+          const timestamp = tsMatch ? new Date(parseInt(tsMatch[1]!, 10)) : new Date();
+          return { path: pngPath, timestamp, base64, mimeType: "image/jpeg" as const, windowInfo: windowInfo ?? undefined };
+        }),
+      );
 
-        const base64 = await pngToJpegBase64(pngPath);
-        const windowInfo = await readWindowInfo(pngPath);
-        const tsMatch = file.match(/screenshot-(\d+)\./);
-        const timestamp = tsMatch ? new Date(parseInt(tsMatch[1]!, 10)) : new Date();
-
-        const label = windowInfo ? `${windowInfo.app} — ${windowInfo.title || "(untitled)"}` : file;
-        console.log(`\n${"─".repeat(60)}`);
-        console.log(`👁️  ${label} (${timestamp.toLocaleTimeString()})`);
-        console.log(`${"─".repeat(60)}`);
-
-        const description = await agent.extractScreenshot({
-          path: pngPath,
-          timestamp,
-          base64,
-          mimeType: "image/jpeg",
-          windowInfo: windowInfo ?? undefined,
-        });
-
-        await mkdir(config.inboxDir, { recursive: true });
-        // Move PNG + JSON sidecar to inbox
-        await rename(pngPath, join(config.inboxDir, file));
-        const jsonFile = file.replace(".png", ".json");
-        await rename(join(config.screenshotsDir, jsonFile), join(config.inboxDir, jsonFile)).catch(() => {});
-
-        if (description) {
-          await writeFile(join(config.inboxDir, file.replace(".png", ".txt")), description, "utf-8");
-          console.log(`✅ ${file.replace(".png", ".txt")}`);
-        } else {
-          console.log(`⏭️  No changes`);
-        }
-
-        consecutiveErrors = 0;
+      // Log what we're processing
+      console.log(`\n${"═".repeat(60)}`);
+      console.log(`📸 Processing ${sampled.length} screenshots:`);
+      for (const s of screenshots) {
+        const win = s.windowInfo;
+        const label = win ? `${win.app}${win.title ? ` — ${win.title}` : ""}` : "unknown";
+        console.log(`   ${s.timestamp.toLocaleTimeString()} ${label}`);
       }
+      console.log(`${"═".repeat(60)}`);
+
+      const startTime = Date.now();
+      await agent.sendScreenshots(screenshots);
+
+      // Record wiki changes for lint queue
+      await recordChangedFiles(config.rootDir, config.wikiDir, startTime);
+
+      // Move all PNGs + sidecars to processed
+      for (const f of toProcess) {
+        await rename(join(config.screenshotsDir, f), join(config.processedDir, f)).catch(() => {});
+        await rename(
+          join(config.screenshotsDir, f.replace(".png", ".json")),
+          join(config.processedDir, f.replace(".png", ".json")),
+        ).catch(() => {});
+      }
+
+      consecutiveErrors = 0;
     } catch (err) {
       consecutiveErrors++;
-      console.error(`❌ Extract error:`, err instanceof Error ? err.message : err);
-
+      console.error(`❌ Agent error:`, err instanceof Error ? err.message : err);
       if (consecutiveErrors > 5) {
         console.error("⏳ Too many errors, backing off 30s…");
         await sleep(30000);
@@ -278,10 +272,25 @@ async function extractLoop(config: Config, agent: AgentHandle, signal: AbortSign
   agent.shutdown();
 }
 
+async function tryLint(config: Config, agent: AgentHandle): Promise<void> {
+  const target = await pickLintTarget(config.rootDir);
+  if (!target) return;
+
+  console.log(`\n🧹 Linting: ${target}`);
+  try {
+    await agent.sendLint(target);
+    await markLinted(config.rootDir, target);
+    console.log(`✅ Lint complete: ${target}`);
+  } catch (err) {
+    console.error(`❌ Lint failed:`, err instanceof Error ? err.message : err);
+  }
+}
+
+// ── Main ──
+
 async function main() {
   const config = parseConfig();
 
-  // Settings override CLI defaults (CLI flags take priority if explicitly set)
   const settings = await loadSettings(config.rootDir);
   if (settings.screenshotIntervalSecs > 0 && config.intervalSecs === DEFAULT_INTERVAL_SECS) {
     config.intervalSecs = settings.screenshotIntervalSecs;
@@ -292,7 +301,6 @@ async function main() {
   const flushed = await flushInbox(config.screenshotsDir, config.processedDir);
   if (flushed > 0) console.log(`🗑️  Flushed ${flushed} stale screenshots`);
 
-  // Start browser and connect agent early so the settings API works
   await startBrowser(config.rootDir, config.wikiDir);
 
   console.log("🤝 Connecting to goose…");
@@ -330,13 +338,10 @@ async function main() {
 
   printBanner(config);
 
-  const fast = settings.fastProvider && settings.fastModel
-    ? `${settings.fastProvider}/${settings.fastModel}`
-    : "default";
   const smart = settings.smartProvider && settings.smartModel
     ? `${settings.smartProvider}/${settings.smartModel}`
     : "default";
-  console.log(`⚡ Fast: ${fast}  |  🧠 Smart: ${smart}  |  📷 Every ${config.intervalSecs}s`);
+  console.log(`🧠 Model: ${smart}  |  📷 Every ${config.intervalSecs}s  |  📦 Batch: ${config.batchSize}`);
 
   const abortController = new AbortController();
   const { signal } = abortController;
@@ -356,11 +361,11 @@ async function main() {
   process.on("SIGTERM", shutdown);
   process.stdout.on("resize", () => {
     const rows = process.stdout.rows ?? 24;
-    process.stdout.write(`\x1b[3;${rows}r`);
+    process.stdout.write(`\x1b[2;${rows}r`);
   });
 
   await Promise.all([
-    extractLoop(config, agent, signal),
+    agentLoop(config, agent, signal),
     sleep(2000).then(() => screenshotLoop(config, signal)),
   ]);
 }
