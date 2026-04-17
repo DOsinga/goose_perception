@@ -1,9 +1,43 @@
 import { execFile, execFileSync } from "node:child_process";
 import { readFile, mkdir, readdir, unlink, rename, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const COMPARE_WIDTH = 1024;
 const DIFF_THRESHOLD = 0.02;
+
+const FRONTWINDOW_SWIFT = `
+import CoreGraphics
+let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] {
+    for w in list {
+        if (w["kCGWindowLayer"] as? Int ?? 999) == 0 {
+            let id = w["kCGWindowNumber"] as? Int ?? 0
+            let app = w["kCGWindowOwnerName"] as? String ?? ""
+            let title = w["kCGWindowName"] as? String ?? ""
+            print("\\(id)|\\(app)|\\(title)")
+            break
+        }
+    }
+}
+`;
+
+let frontwindowBin: string | null = null;
+
+function ensureFrontwindowBin(): string {
+  if (frontwindowBin && existsSync(frontwindowBin)) return frontwindowBin;
+  const binPath = join(tmpdir(), "goose-perception-frontwindow");
+  const srcPath = binPath + ".swift";
+  try {
+    execFileSync("sh", ["-c", `cat > '${srcPath}' << 'SWIFT'\n${FRONTWINDOW_SWIFT}\nSWIFT`]);
+    execFileSync("swiftc", ["-O", srcPath, "-o", binPath], { timeout: 30000 });
+    frontwindowBin = binPath;
+  } catch {
+    frontwindowBin = null;
+  }
+  return frontwindowBin ?? "";
+}
 
 export interface Screenshot {
   path: string;
@@ -28,21 +62,9 @@ export interface WindowInfo {
  */
 export function getFrontWindow(): WindowInfo {
   try {
-    const out = execFileSync("swift", ["-e", `
-import CoreGraphics
-let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] {
-    for w in list {
-        if (w["kCGWindowLayer"] as? Int ?? 999) == 0 {
-            let id = w["kCGWindowNumber"] as? Int ?? 0
-            let app = w["kCGWindowOwnerName"] as? String ?? ""
-            let title = w["kCGWindowName"] as? String ?? ""
-            print("\\(id)|\\(app)|\\(title)")
-            break
-        }
-    }
-}
-`], { encoding: "utf-8", timeout: 5000 }).trim();
+    const bin = ensureFrontwindowBin();
+    if (!bin) throw new Error("no frontwindow binary");
+    const out = execFileSync(bin, { encoding: "utf-8", timeout: 2000 }).trim();
 
     const [idStr, app, ...titleParts] = out.split("|");
     const windowId = parseInt(idStr ?? "0", 10);
