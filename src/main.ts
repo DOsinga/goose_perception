@@ -266,11 +266,35 @@ function textSimilarity(a: string, b: string): number {
 
 const SIMILARITY_THRESHOLD = 0.7; // skip if 70%+ similar to last batch
 
+/**
+ * Adaptive wiki update loop.
+ *
+ * Instead of a fixed timer, the loop adapts based on how much the screen
+ * is changing:
+ *
+ *  - After a wiki update: wait at least COOLDOWN_AFTER_UPDATE before the
+ *    next one. This is the minimum gap between smart model calls.
+ *  - While waiting: extractions pile up in the inbox. More extractions =
+ *    bigger batch = more context per call = fewer calls needed.
+ *  - When a batch IS ready: check similarity. If screen hasn't changed
+ *    much, skip it and extend the cooldown. This naturally backs off
+ *    when you're staring at the same thing.
+ *  - Burst detection: if we skip multiple batches in a row and then
+ *    suddenly get a very different extraction, we fire immediately —
+ *    that's a context switch worth capturing.
+ */
 async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal): Promise<void> {
-  const BATCH_WAIT_MS = 10_000;  // wait 10s for a batch to accumulate
-  const IDLE_WAIT_MS = 15_000;   // wait 15s between wiki checks when idle
+  const MIN_COOLDOWN_MS = 300_000;    // at least 5 min between smart calls
+  const MAX_COOLDOWN_MS = 900_000;    // at most 15 min between smart calls
+  const BURST_COOLDOWN_MS = 60_000;   // 1 min cooldown after a burst (context switch)
+  const IDLE_WAIT_MS = 30_000;        // check for notes/lint every 30s when idle
+  const BATCH_COLLECT_MS = 30_000;    // wait 30s to collect extractions into a batch
+
   let consecutiveErrors = 0;
   let lastBatchText = "";
+  let consecutiveSkips = 0;
+  let cooldownMs = MIN_COOLDOWN_MS;
+  let lastUpdateTime = 0;
 
   while (!signal.aborted) {
     try {
@@ -294,6 +318,7 @@ async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal)
             await recordChangedFiles(config.rootDir, config.wikiDir, startTime);
             console.log(`\n✅ Notes update complete`);
             logUsage(agent, config.rootDir);
+            lastUpdateTime = Date.now();
             continue;
           }
         } catch (err) {
@@ -313,32 +338,34 @@ async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal)
           await recordChangedFiles(config.rootDir, config.wikiDir, startTime);
           console.log(`\n✅ Lint complete: ${lintTarget}`);
           logUsage(agent, config.rootDir);
+          lastUpdateTime = Date.now();
         }
 
         await sleep(IDLE_WAIT_MS);
         continue;
       }
 
-      // Wait a bit for more extractions to arrive before batching
-      if (txts.length < config.batchSize) {
-        await sleep(BATCH_WAIT_MS);
-        // Re-read to pick up any new ones
-        const updated = await readdir(config.inboxDir).catch(() => [] as string[]);
-        const updatedTxts = updated
-          .filter((f) => f.startsWith("screenshot-") && f.endsWith(".txt"))
-          .sort();
-        // Use whatever we have now
-        if (updatedTxts.length > 0) {
-          txts.length = 0;
-          txts.push(...updatedTxts);
-        }
+      // Respect cooldown — don't call smart model too frequently
+      const timeSinceUpdate = Date.now() - lastUpdateTime;
+      if (timeSinceUpdate < cooldownMs) {
+        const remaining = cooldownMs - timeSinceUpdate;
+        await sleep(Math.min(remaining, 10_000)); // check every 10s
+        continue;
       }
 
-      // Build extraction batch
+      // Wait to collect more extractions into a batch
+      await sleep(BATCH_COLLECT_MS);
+      // Re-read inbox after waiting
+      const updatedFiles = await readdir(config.inboxDir).catch(() => [] as string[]);
+      const allTxts = updatedFiles
+        .filter((f) => f.startsWith("screenshot-") && f.endsWith(".txt"))
+        .sort();
+
+      // Build extraction batch from everything in inbox
       const extractions: Extraction[] = [];
       const toCleanup: string[] = [];
 
-      for (const txtFile of txts) {
+      for (const txtFile of allTxts) {
         const txtPath = join(config.inboxDir, txtFile);
         const pngFile = txtFile.replace(".txt", ".png");
         const pngPath = join(config.inboxDir, pngFile);
@@ -349,12 +376,15 @@ async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal)
 
         extractions.push({ filename: txtFile, timestamp, text });
         toCleanup.push(txtPath);
-        toCleanup.push(pngPath); // clean up the PNG too
+        toCleanup.push(pngPath);
       }
 
-      // Check if this batch is too similar to the last one we sent
+      if (extractions.length === 0) continue;
+
+      // Check similarity — use the LAST extraction (most recent screen state)
       const batchText = extractions.map(e => e.text).join("\n");
-      const similarity = lastBatchText ? textSimilarity(batchText, lastBatchText) : 0;
+      const latestText = extractions[extractions.length - 1]!.text;
+      const similarity = lastBatchText ? textSimilarity(latestText, lastBatchText) : 0;
 
       // Check Apple Notes for changes
       let notesContext = "";
@@ -368,26 +398,43 @@ async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal)
         console.error(`📝 Notes check failed:`, err instanceof Error ? err.message : err);
       }
 
-      // Skip smart model if content is too similar and no notes changed
-      if (similarity >= SIMILARITY_THRESHOLD && !notesContext) {
-        console.log(`⏭️  Skipping wiki update — ${(similarity * 100).toFixed(0)}% similar to last batch`);
-        // Still clean up the files
+      // Decide: skip or send?
+      const isBurst = consecutiveSkips >= 2 && similarity < 0.4;
+      const shouldSkip = similarity >= SIMILARITY_THRESHOLD && !notesContext && !isBurst;
+
+      if (shouldSkip) {
+        consecutiveSkips++;
+        // Extend cooldown when nothing is changing (up to max)
+        cooldownMs = Math.min(cooldownMs * 1.5, MAX_COOLDOWN_MS);
+        console.log(`⏭️  Skipping — ${(similarity * 100).toFixed(0)}% similar (next check in ${(cooldownMs / 1000).toFixed(0)}s)`);
+        // Clean up files
         for (const filePath of toCleanup) {
           const filename = filePath.split("/").pop()!;
           await rename(filePath, join(config.processedDir, filename)).catch(() =>
             unlink(filePath).catch(() => {})
           );
         }
+        lastBatchText = latestText;
         continue;
       }
 
+      // Sending! Reset skip counter, set appropriate cooldown
+      if (isBurst) {
+        console.log(`🔥 Burst detected! Screen changed significantly after ${consecutiveSkips} skips`);
+        cooldownMs = BURST_COOLDOWN_MS; // short cooldown — might be more changes coming
+      } else {
+        cooldownMs = MIN_COOLDOWN_MS;
+      }
+      consecutiveSkips = 0;
+
       console.log(`\n${"═".repeat(60)}`);
-      console.log(`🧠 Wiki update: ${extractions.length} extraction(s)${notesContext ? " + notes" : ""}${lastBatchText ? ` (${(similarity * 100).toFixed(0)}% similar)` : ""}`);
+      console.log(`🧠 Wiki update: ${extractions.length} extraction(s)${notesContext ? " + notes" : ""} (${(similarity * 100).toFixed(0)}% similar${isBurst ? ", burst" : ""})`);
       console.log(`${"═".repeat(60)}`);
 
       const startTime = Date.now();
       await agent.sendExtractions(extractions, notesContext || undefined);
-      lastBatchText = batchText;
+      lastBatchText = latestText;
+      lastUpdateTime = Date.now();
 
       // Track wiki changes for lint queue
       await recordChangedFiles(config.rootDir, config.wikiDir, startTime);
