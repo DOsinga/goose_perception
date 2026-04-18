@@ -239,7 +239,11 @@ function renderMarkdown(md: string): string {
   // Horizontal rules
   html = html.replace(/^---+$/gm, "<hr>");
 
-  // Unordered list items
+  // Task list items (checkboxes)
+  html = html.replace(/^(\s*)[-*] \[x\] (.+)$/gm, '$1<li class="task done"><input type="checkbox" checked disabled> $2</li>');
+  html = html.replace(/^(\s*)[-*] \[ \] (.+)$/gm, '$1<li class="task"><input type="checkbox" disabled> $2</li>');
+
+  // Unordered list items (non-task)
   html = html.replace(/^(\s*)[-*] (.+)$/gm, "$1<li>$2</li>");
   // Wrap consecutive <li> in <ul>
   html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, "<ul>\n$1</ul>\n");
@@ -392,6 +396,9 @@ function wrap(title: string, body: string): string {
     border-radius: 4px; font-family: inherit;
   }
   .nav-search input:focus { outline: 1px solid var(--accent); width: 200px; }
+  li.task { list-style: none; margin-left: -1.2rem; }
+  li.task input[type="checkbox"] { margin-right: 0.4rem; accent-color: var(--accent); }
+  li.task.done { opacity: 0.6; text-decoration: line-through; }
 </style>
 </head>
 <body>
