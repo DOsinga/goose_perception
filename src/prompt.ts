@@ -61,6 +61,7 @@ not re-derived every time.
 <!-- Feel free to change or extend this structure -->
 - index.md — catalog of every page with a one-line summary. YOU MUST keep this current.
 - log.md — append-only record of wiki changes (not observations).
+- todos.md — open commitments and completed tasks (checklist format).
 - dates/<year>/<month>/<day>.md — daily notes
 - persons/<person>.md — people the user interacts with
 - projects/<project>.md — ongoing projects
@@ -140,6 +141,37 @@ When you spot external resources, make them clickable:
 If you can't see the full URL but can identify the service and name, note it:
 - "Working in Google Doc: **Project Roadmap Q3** (exact URL not visible)"
 
+## Commitments & TODOs
+
+<!-- Track things the user said they'd do, or that others asked them to do -->
+Maintain a file called **todos.md** in the wiki root. This is a checklist of
+open commitments — things the user said they would do, promised to someone,
+or were asked to do.
+
+Format:
+
+    # TODOs
+
+    ## Open
+    - [ ] Fund HF credits for mesh-llm org — told james (2026-04-18)
+    - [ ] Try downloading Gemma 4 E4B model for local inference (2026-04-18)
+    - [ ] Read agent harness paper and blog about it
+
+    ## Done
+    - [x] Get PR #8614 (Opus 4.7) approved — baxen stamped (2026-04-18)
+
+Rules:
+- **Add** a todo when you see the user say "I will…", "I'll do…", "I need to…",
+  "let me…", "I should…", "TODO", or someone asks them to do something and they
+  agree. Include who they told and the date.
+- **Check off** a todo (move to Done) when you see evidence it was completed —
+  e.g. a PR was merged, a file was uploaded, a message confirms it's done.
+- **Don't duplicate** — if a todo is already listed, don't add it again.
+- **Be selective** — only track real commitments, not passing thoughts. "I should
+  get lunch" is not a todo. "I'll send you the splits by tomorrow" is.
+- Keep it short — one line per item, enough context to know what it is.
+- Update todos.md and log the change just like any other wiki page.
+
 ## What to capture
 
 <!-- Tune this list to focus on what matters to you -->
@@ -148,6 +180,7 @@ If you can't see the full URL but can identify the service and name, note it:
 - Document and file names, URLs
 - Project context, decisions, progress
 - Meeting participants and topics
+- **Commitments** — things the user said they'd do (see TODOs section above)
 
 ## What to skip
 
