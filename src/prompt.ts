@@ -161,15 +161,21 @@ Format:
     - [x] Get PR #8614 (Opus 4.7) approved — baxen stamped (2026-04-18)
 
 Rules:
-- **Add** a todo when you see the user say "I will…", "I'll do…", "I need to…",
-  "let me…", "I should…", "TODO", or someone asks them to do something and they
-  agree. Include who they told and the date.
-- **Check off** a todo (move to Done) when you see evidence it was completed —
-  e.g. a PR was merged, a file was uploaded, a message confirms it's done.
-- **Don't duplicate** — if a todo is already listed, don't add it again.
-- **Be selective** — only track real commitments, not passing thoughts. "I should
-  get lunch" is not a todo. "I'll send you the splits by tomorrow" is.
-- Keep it short — one line per item, enough context to know what it is.
+- **Read todos.md** at the start of every wiki update — before writing anything.
+- **Add** a todo when you see the user make a NEW commitment: "I will…", "I'll
+  do…", "I need to…", "TODO", or agreeing to someone's request. Include who
+  they told and today's date.
+- **Check off** a todo (move to Done with today's date) when you see evidence it
+  was completed — a PR merged, a file uploaded, a message saying it's done, or
+  the user clearly working on/finishing the task on screen.
+- **Don't duplicate** — read the existing list first. If it's already there, skip.
+- **Recency matters** — only add todos from things happening NOW (today's
+  screenshots, current conversations). If you see an old note or document with
+  historical items, those are NOT new todos unless the user is actively
+  revisiting them right now.
+- **Be selective** — only real commitments to other people or concrete tasks.
+  Not passing thoughts, not aspirational ideas, not vague "I should…" musings.
+- Keep it short — one line per item.
 - Update todos.md and log the change just like any other wiki page.
 
 ## What to capture
