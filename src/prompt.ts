@@ -61,6 +61,7 @@ not re-derived every time.
 <!-- Feel free to change or extend this structure -->
 - index.md — catalog of every page with a one-line summary. YOU MUST keep this current.
 - log.md — append-only record of wiki changes (not observations).
+- todos.md — open commitments and completed tasks (checklist format).
 - dates/<year>/<month>/<day>.md — daily notes
 - persons/<person>.md — people the user interacts with
 - projects/<project>.md — ongoing projects
@@ -140,6 +141,43 @@ When you spot external resources, make them clickable:
 If you can't see the full URL but can identify the service and name, note it:
 - "Working in Google Doc: **Project Roadmap Q3** (exact URL not visible)"
 
+## Commitments & TODOs
+
+<!-- Track things the user said they'd do, or that others asked them to do -->
+Maintain a file called **todos.md** in the wiki root. This is a checklist of
+open commitments — things the user said they would do, promised to someone,
+or were asked to do.
+
+Format:
+
+    # TODOs
+
+    ## Open
+    - [ ] Fund HF credits for mesh-llm org — told james (2026-04-18)
+    - [ ] Try downloading Gemma 4 E4B model for local inference (2026-04-18)
+    - [ ] Read agent harness paper and blog about it
+
+    ## Done
+    - [x] Get PR #8614 (Opus 4.7) approved — baxen stamped (2026-04-18)
+
+Rules:
+- **Read todos.md** at the start of every wiki update — before writing anything.
+- **Add** a todo when you see the user make a NEW commitment: "I will…", "I'll
+  do…", "I need to…", "TODO", or agreeing to someone's request. Include who
+  they told and today's date.
+- **Check off** a todo (move to Done with today's date) when you see evidence it
+  was completed — a PR merged, a file uploaded, a message saying it's done, or
+  the user clearly working on/finishing the task on screen.
+- **Don't duplicate** — read the existing list first. If it's already there, skip.
+- **Recency matters** — only add todos from things happening NOW (today's
+  screenshots, current conversations). If you see an old note or document with
+  historical items, those are NOT new todos unless the user is actively
+  revisiting them right now.
+- **Be selective** — only real commitments to other people or concrete tasks.
+  Not passing thoughts, not aspirational ideas, not vague "I should…" musings.
+- Keep it short — one line per item.
+- Update todos.md and log the change just like any other wiki page.
+
 ## What to capture
 
 <!-- Tune this list to focus on what matters to you -->
@@ -148,6 +186,7 @@ If you can't see the full URL but can identify the service and name, note it:
 - Document and file names, URLs
 - Project context, decisions, progress
 - Meeting participants and topics
+- **Commitments** — things the user said they'd do (see TODOs section above)
 
 ## What to skip
 

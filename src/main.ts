@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 
 import { resolve, join } from "node:path";
-import { mkdir, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { parseArgs } from "node:util";
 import { takeScreenshot, flushInbox, hasChangedEnough, createBaseBmp, pngToJpegBase64 } from "./screenshot.js";
-import { connectAgent, type AgentHandle } from "./agent.js";
+import { connectAgent, type AgentHandle, type Extraction } from "./agent.js";
 import { startBrowser, setBrowserAgent } from "./browser.js";
 import { ensurePromptFiles } from "./prompt.js";
-import { seedLintQueue } from "./lint.js";
+import { seedLintQueue, recordChangedFiles, pickLintTarget, markLinted } from "./lint.js";
 import { loadSettings } from "./settings.js";
+import { getChangedNotes, formatNotesForAgent } from "./notes.js";
 
 const DEFAULT_INTERVAL_SECS = 5;
 const DEFAULT_BATCH_SIZE = 3;
@@ -219,6 +220,309 @@ async function extractLoop(config: Config, agent: AgentHandle, signal: AbortSign
   agent.shutdown();
 }
 
+interface DailyUsage {
+  date: string;
+  fast: { inputTokens: number; outputTokens: number; cost: number };
+  smart: { inputTokens: number; outputTokens: number; cost: number };
+  total: { inputTokens: number; outputTokens: number; cost: number };
+}
+
+// Track last-seen session counters so we can compute deltas
+let prevUsage = { fast: { in: 0, out: 0, cost: 0 }, smart: { in: 0, out: 0, cost: 0 } };
+
+async function loadDailyUsage(rootDir: string): Promise<DailyUsage[]> {
+  try {
+    const raw = await readFile(join(rootDir, "usage.json"), "utf-8");
+    const data = JSON.parse(raw);
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+async function logUsage(agent: AgentHandle, rootDir: string) {
+  const u = agent.getUsage();
+  const fmt = (n: number) => n.toLocaleString();
+
+  // Compute delta since last logUsage call
+  const delta = {
+    fast: {
+      inputTokens: u.fast.inputTokens - prevUsage.fast.in,
+      outputTokens: u.fast.outputTokens - prevUsage.fast.out,
+      cost: u.fast.cost - prevUsage.fast.cost,
+    },
+    smart: {
+      inputTokens: u.smart.inputTokens - prevUsage.smart.in,
+      outputTokens: u.smart.outputTokens - prevUsage.smart.out,
+      cost: u.smart.cost - prevUsage.smart.cost,
+    },
+  };
+  prevUsage = {
+    fast: { in: u.fast.inputTokens, out: u.fast.outputTokens, cost: u.fast.cost },
+    smart: { in: u.smart.inputTokens, out: u.smart.outputTokens, cost: u.smart.cost },
+  };
+
+  // Accumulate into daily totals
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const history = await loadDailyUsage(rootDir);
+  let entry = history.find(e => e.date === today);
+  if (!entry) {
+    entry = {
+      date: today,
+      fast: { inputTokens: 0, outputTokens: 0, cost: 0 },
+      smart: { inputTokens: 0, outputTokens: 0, cost: 0 },
+      total: { inputTokens: 0, outputTokens: 0, cost: 0 },
+    };
+    history.push(entry);
+  }
+  entry.fast.inputTokens += delta.fast.inputTokens;
+  entry.fast.outputTokens += delta.fast.outputTokens;
+  entry.fast.cost += delta.fast.cost;
+  entry.smart.inputTokens += delta.smart.inputTokens;
+  entry.smart.outputTokens += delta.smart.outputTokens;
+  entry.smart.cost += delta.smart.cost;
+  entry.total.inputTokens += delta.fast.inputTokens + delta.smart.inputTokens;
+  entry.total.outputTokens += delta.fast.outputTokens + delta.smart.outputTokens;
+  entry.total.cost += delta.fast.cost + delta.smart.cost;
+
+  // Log current session + today's total
+  const todayCost = entry.total.cost;
+  const cost = todayCost > 0 ? ` | 💰 today: $${todayCost.toFixed(4)}` : "";
+  const line =
+    `📊 Tokens — fast: ${fmt(u.fast.inputTokens)}in/${fmt(u.fast.outputTokens)}out` +
+    ` | smart: ${fmt(u.smart.inputTokens)}in/${fmt(u.smart.outputTokens)}out` +
+    ` | total: ${fmt(u.total.inputTokens + u.total.outputTokens)}${cost}`;
+  console.log(line);
+
+  // Keep last 30 days
+  const recent = history.filter(e => e.date >= new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
+  await writeFile(
+    join(rootDir, "usage.json"),
+    JSON.stringify(recent, null, 2) + "\n",
+    "utf-8",
+  ).catch(() => {});
+}
+
+/**
+ * Wiki update loop: pick up .txt extractions from inbox, batch them,
+ * send to the smart model for wiki updates, then lint on idle.
+ */
+/**
+ * Compute similarity between two texts using word-level Jaccard index.
+ * Returns 0.0 (completely different) to 1.0 (identical words).
+ */
+function textSimilarity(a: string, b: string): number {
+  const wordsA = new Set(a.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+  const wordsB = new Set(b.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+  if (wordsA.size === 0 && wordsB.size === 0) return 1.0;
+  if (wordsA.size === 0 || wordsB.size === 0) return 0.0;
+  let intersection = 0;
+  for (const w of wordsA) {
+    if (wordsB.has(w)) intersection++;
+  }
+  return intersection / (wordsA.size + wordsB.size - intersection);
+}
+
+const SIMILARITY_THRESHOLD = 0.7; // skip if 70%+ similar to last batch
+
+/**
+ * Adaptive wiki update loop.
+ *
+ * Instead of a fixed timer, the loop adapts based on how much the screen
+ * is changing:
+ *
+ *  - After a wiki update: wait at least COOLDOWN_AFTER_UPDATE before the
+ *    next one. This is the minimum gap between smart model calls.
+ *  - While waiting: extractions pile up in the inbox. More extractions =
+ *    bigger batch = more context per call = fewer calls needed.
+ *  - When a batch IS ready: check similarity. If screen hasn't changed
+ *    much, skip it and extend the cooldown. This naturally backs off
+ *    when you're staring at the same thing.
+ *  - Burst detection: if we skip multiple batches in a row and then
+ *    suddenly get a very different extraction, we fire immediately —
+ *    that's a context switch worth capturing.
+ */
+async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal): Promise<void> {
+  const MIN_COOLDOWN_MS = 300_000;    // at least 5 min between smart calls
+  const MAX_COOLDOWN_MS = 900_000;    // at most 15 min between smart calls
+  const BURST_COOLDOWN_MS = 60_000;   // 1 min cooldown after a burst (context switch)
+  const IDLE_WAIT_MS = 30_000;        // check for notes/lint every 30s when idle
+  const BATCH_COLLECT_MS = 30_000;    // wait 30s to collect extractions into a batch
+
+  let consecutiveErrors = 0;
+  let lastBatchText = "";
+  let consecutiveSkips = 0;
+  let cooldownMs = MIN_COOLDOWN_MS;
+  let lastUpdateTime = 0;
+
+  while (!signal.aborted) {
+    try {
+      const files = await readdir(config.inboxDir).catch(() => [] as string[]);
+      const txts = files
+        .filter((f) => f.startsWith("screenshot-") && f.endsWith(".txt"))
+        .sort();
+
+      if (txts.length === 0) {
+        // No extractions pending — check Apple Notes for changes
+        try {
+          const changedNotes = await getChangedNotes(config.rootDir);
+          if (changedNotes.length > 0) {
+            const notesCtx = formatNotesForAgent(changedNotes);
+            console.log(`\n${"═".repeat(60)}`);
+            console.log(`📝 Notes only: ${changedNotes.map(n => n.name).join(", ")}`);
+            console.log(`${"═".repeat(60)}`);
+
+            const startTime = Date.now();
+            await agent.sendExtractions([], notesCtx);
+            await recordChangedFiles(config.rootDir, config.wikiDir, startTime);
+            console.log(`\n✅ Notes update complete`);
+            logUsage(agent, config.rootDir);
+            lastUpdateTime = Date.now();
+            continue;
+          }
+        } catch (err) {
+          console.error(`📝 Notes check failed:`, err instanceof Error ? err.message : err);
+        }
+
+        // No notes changes either — try linting
+        const lintTarget = await pickLintTarget(config.rootDir);
+        if (lintTarget) {
+          console.log(`\n${"─".repeat(60)}`);
+          console.log(`🧹 Linting: ${lintTarget}`);
+          console.log(`${"─".repeat(60)}`);
+
+          const startTime = Date.now();
+          await agent.sendLint(lintTarget);
+          await markLinted(config.rootDir, lintTarget);
+          await recordChangedFiles(config.rootDir, config.wikiDir, startTime);
+          console.log(`\n✅ Lint complete: ${lintTarget}`);
+          logUsage(agent, config.rootDir);
+          lastUpdateTime = Date.now();
+        }
+
+        await sleep(IDLE_WAIT_MS);
+        continue;
+      }
+
+      // Respect cooldown — don't call smart model too frequently
+      const timeSinceUpdate = Date.now() - lastUpdateTime;
+      if (timeSinceUpdate < cooldownMs) {
+        const remaining = cooldownMs - timeSinceUpdate;
+        await sleep(Math.min(remaining, 10_000)); // check every 10s
+        continue;
+      }
+
+      // Wait to collect more extractions into a batch
+      await sleep(BATCH_COLLECT_MS);
+      // Re-read inbox after waiting
+      const updatedFiles = await readdir(config.inboxDir).catch(() => [] as string[]);
+      const allTxts = updatedFiles
+        .filter((f) => f.startsWith("screenshot-") && f.endsWith(".txt"))
+        .sort();
+
+      // Build extraction batch from everything in inbox
+      const extractions: Extraction[] = [];
+      const toCleanup: string[] = [];
+
+      for (const txtFile of allTxts) {
+        const txtPath = join(config.inboxDir, txtFile);
+        const pngFile = txtFile.replace(".txt", ".png");
+        const pngPath = join(config.inboxDir, pngFile);
+
+        const text = await readFile(txtPath, "utf-8");
+        const tsMatch = txtFile.match(/screenshot-(\d+)\./);
+        const timestamp = tsMatch ? new Date(parseInt(tsMatch[1]!, 10)) : new Date();
+
+        extractions.push({ filename: txtFile, timestamp, text });
+        toCleanup.push(txtPath);
+        toCleanup.push(pngPath);
+      }
+
+      if (extractions.length === 0) continue;
+
+      // Check similarity — use the LAST extraction (most recent screen state)
+      const batchText = extractions.map(e => e.text).join("\n");
+      const latestText = extractions[extractions.length - 1]!.text;
+      const similarity = lastBatchText ? textSimilarity(latestText, lastBatchText) : 0;
+
+      // Check Apple Notes for changes
+      let notesContext = "";
+      try {
+        const changedNotes = await getChangedNotes(config.rootDir);
+        if (changedNotes.length > 0) {
+          notesContext = formatNotesForAgent(changedNotes);
+          console.log(`📝 ${changedNotes.length} Apple Note(s) changed: ${changedNotes.map(n => n.name).join(", ")}`);
+        }
+      } catch (err) {
+        console.error(`📝 Notes check failed:`, err instanceof Error ? err.message : err);
+      }
+
+      // Decide: skip or send?
+      const isBurst = consecutiveSkips >= 2 && similarity < 0.4;
+      const shouldSkip = similarity >= SIMILARITY_THRESHOLD && !notesContext && !isBurst;
+
+      if (shouldSkip) {
+        consecutiveSkips++;
+        // Extend cooldown when nothing is changing (up to max)
+        cooldownMs = Math.min(cooldownMs * 1.5, MAX_COOLDOWN_MS);
+        console.log(`⏭️  Skipping — ${(similarity * 100).toFixed(0)}% similar (next check in ${(cooldownMs / 1000).toFixed(0)}s)`);
+        // Clean up files
+        for (const filePath of toCleanup) {
+          const filename = filePath.split("/").pop()!;
+          await rename(filePath, join(config.processedDir, filename)).catch(() =>
+            unlink(filePath).catch(() => {})
+          );
+        }
+        lastBatchText = latestText;
+        continue;
+      }
+
+      // Sending! Reset skip counter, set appropriate cooldown
+      if (isBurst) {
+        console.log(`🔥 Burst detected! Screen changed significantly after ${consecutiveSkips} skips`);
+        cooldownMs = BURST_COOLDOWN_MS; // short cooldown — might be more changes coming
+      } else {
+        cooldownMs = MIN_COOLDOWN_MS;
+      }
+      consecutiveSkips = 0;
+
+      console.log(`\n${"═".repeat(60)}`);
+      console.log(`🧠 Wiki update: ${extractions.length} extraction(s)${notesContext ? " + notes" : ""} (${(similarity * 100).toFixed(0)}% similar${isBurst ? ", burst" : ""})`);
+      console.log(`${"═".repeat(60)}`);
+
+      const startTime = Date.now();
+      await agent.sendExtractions(extractions, notesContext || undefined);
+      lastBatchText = latestText;
+      lastUpdateTime = Date.now();
+
+      // Track wiki changes for lint queue
+      await recordChangedFiles(config.rootDir, config.wikiDir, startTime);
+
+      // Move processed files out
+      for (const filePath of toCleanup) {
+        const filename = filePath.split("/").pop()!;
+        await rename(filePath, join(config.processedDir, filename)).catch(() =>
+          unlink(filePath).catch(() => {})
+        );
+      }
+
+      console.log(`\n✅ Wiki update complete — processed ${extractions.length} extraction(s)`);
+      logUsage(agent, config.rootDir);
+      consecutiveErrors = 0;
+    } catch (err) {
+      consecutiveErrors++;
+      console.error(`❌ Wiki update error:`, err instanceof Error ? err.message : err);
+
+      if (consecutiveErrors > 5) {
+        console.error("⏳ Too many errors, backing off 60s…");
+        await sleep(60_000);
+      } else {
+        await sleep(10_000);
+      }
+    }
+  }
+}
+
 async function main() {
   const config = parseConfig();
 
@@ -298,6 +602,7 @@ async function main() {
 
   await Promise.all([
     extractLoop(config, agent, signal),
+    wikiLoop(config, agent, signal),
     sleep(2000).then(() => screenshotLoop(config, signal)),
   ]);
 }

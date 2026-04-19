@@ -54,6 +54,26 @@ async function handleRequest(
     return;
   }
 
+  // ── POST: toggle checkbox ──
+  if (req.method === "POST" && url.searchParams.has("toggleLine")) {
+    const lineNum = parseInt(url.searchParams.get("toggleLine")!, 10);
+    const filePath = resolveFilePath(path, rootDir, wikiDir);
+    const content = await readFile(filePath, "utf-8");
+    const lines = content.split("\n");
+    if (lineNum >= 0 && lineNum < lines.length) {
+      const line = lines[lineNum]!;
+      if (line.match(/^(\s*[-*] )\[ \] /)) {
+        lines[lineNum] = line.replace("[ ] ", "[x] ");
+      } else if (line.match(/^(\s*[-*] )\[x\] /)) {
+        lines[lineNum] = line.replace("[x] ", "[ ] ");
+      }
+      await writeFile(filePath, lines.join("\n"), "utf-8");
+    }
+    res.writeHead(302, { Location: path });
+    res.end();
+    return;
+  }
+
   // ── POST: save file ──
   if (req.method === "POST") {
     const body = await readBody(req);
@@ -239,7 +259,20 @@ function renderMarkdown(md: string): string {
   // Horizontal rules
   html = html.replace(/^---+$/gm, "<hr>");
 
-  // Unordered list items
+  // Task list items (checkboxes) — track source line numbers for toggling
+  {
+    let lineNum = 0;
+    html = html.replace(/^(.*)$/gm, (line) => {
+      const n = lineNum++;
+      const doneMatch = line.match(/^(\s*)[-*] \[x\] (.+)$/);
+      if (doneMatch) return `${doneMatch[1]}<li class="task done"><input type="checkbox" checked data-line="${n}"> ${doneMatch[2]}</li>`;
+      const openMatch = line.match(/^(\s*)[-*] \[ \] (.+)$/);
+      if (openMatch) return `${openMatch[1]}<li class="task"><input type="checkbox" data-line="${n}"> ${openMatch[2]}</li>`;
+      return line;
+    });
+  }
+
+  // Unordered list items (non-task)
   html = html.replace(/^(\s*)[-*] (.+)$/gm, "$1<li>$2</li>");
   // Wrap consecutive <li> in <ul>
   html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, "<ul>\n$1</ul>\n");
@@ -392,6 +425,9 @@ function wrap(title: string, body: string): string {
     border-radius: 4px; font-family: inherit;
   }
   .nav-search input:focus { outline: 1px solid var(--accent); width: 200px; }
+  li.task { list-style: none; margin-left: -1.2rem; }
+  li.task input[type="checkbox"] { margin-right: 0.4rem; accent-color: var(--accent); }
+  li.task.done { opacity: 0.6; text-decoration: line-through; }
 </style>
 </head>
 <body>
@@ -425,6 +461,20 @@ ${breadcrumb(relPath)}
   <a href="${urlPath}?edit" class="btn">✏️ Edit</a>
 </div>
 ${rendered}
+<script>
+document.querySelectorAll('input[type="checkbox"][data-line]').forEach(cb => {
+  cb.style.cursor = 'pointer';
+  cb.addEventListener('click', e => {
+    e.preventDefault();
+    const line = cb.getAttribute('data-line');
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '${urlPath}?toggleLine=' + line;
+    document.body.appendChild(form);
+    form.submit();
+  });
+});
+</script>
 `;
   return wrap(title, body);
 }
