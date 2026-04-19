@@ -39,6 +39,14 @@ cat ~/perception/wiki/dates/2026/04/19.md
 
 Daily notes are verbose timestamped logs. Only read if you need specifics about what happened on a particular day.
 
+## Setup
+
+For CLI use, pass `--add-dir ~/perception/wiki` so the wiki is accessible:
+
+```bash
+claude --add-dir ~/perception/wiki
+```
+
 ## Rules
 
 - Read `owner.md` and `todos.md` before answering questions about the user or their work.
