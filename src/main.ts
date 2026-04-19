@@ -220,26 +220,85 @@ async function extractLoop(config: Config, agent: AgentHandle, signal: AbortSign
   agent.shutdown();
 }
 
+interface DailyUsage {
+  date: string;
+  fast: { inputTokens: number; outputTokens: number; cost: number };
+  smart: { inputTokens: number; outputTokens: number; cost: number };
+  total: { inputTokens: number; outputTokens: number; cost: number };
+}
+
+// Track last-seen session counters so we can compute deltas
+let prevUsage = { fast: { in: 0, out: 0, cost: 0 }, smart: { in: 0, out: 0, cost: 0 } };
+
+async function loadDailyUsage(rootDir: string): Promise<DailyUsage[]> {
+  try {
+    const raw = await readFile(join(rootDir, "usage.json"), "utf-8");
+    const data = JSON.parse(raw);
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
 async function logUsage(agent: AgentHandle, rootDir: string) {
   const u = agent.getUsage();
   const fmt = (n: number) => n.toLocaleString();
-  const cost = u.total.cost > 0 ? ` | 💰 $${u.total.cost.toFixed(4)}` : "";
+
+  // Compute delta since last logUsage call
+  const delta = {
+    fast: {
+      inputTokens: u.fast.inputTokens - prevUsage.fast.in,
+      outputTokens: u.fast.outputTokens - prevUsage.fast.out,
+      cost: u.fast.cost - prevUsage.fast.cost,
+    },
+    smart: {
+      inputTokens: u.smart.inputTokens - prevUsage.smart.in,
+      outputTokens: u.smart.outputTokens - prevUsage.smart.out,
+      cost: u.smart.cost - prevUsage.smart.cost,
+    },
+  };
+  prevUsage = {
+    fast: { in: u.fast.inputTokens, out: u.fast.outputTokens, cost: u.fast.cost },
+    smart: { in: u.smart.inputTokens, out: u.smart.outputTokens, cost: u.smart.cost },
+  };
+
+  // Accumulate into daily totals
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const history = await loadDailyUsage(rootDir);
+  let entry = history.find(e => e.date === today);
+  if (!entry) {
+    entry = {
+      date: today,
+      fast: { inputTokens: 0, outputTokens: 0, cost: 0 },
+      smart: { inputTokens: 0, outputTokens: 0, cost: 0 },
+      total: { inputTokens: 0, outputTokens: 0, cost: 0 },
+    };
+    history.push(entry);
+  }
+  entry.fast.inputTokens += delta.fast.inputTokens;
+  entry.fast.outputTokens += delta.fast.outputTokens;
+  entry.fast.cost += delta.fast.cost;
+  entry.smart.inputTokens += delta.smart.inputTokens;
+  entry.smart.outputTokens += delta.smart.outputTokens;
+  entry.smart.cost += delta.smart.cost;
+  entry.total.inputTokens += delta.fast.inputTokens + delta.smart.inputTokens;
+  entry.total.outputTokens += delta.fast.outputTokens + delta.smart.outputTokens;
+  entry.total.cost += delta.fast.cost + delta.smart.cost;
+
+  // Log current session + today's total
+  const todayCost = entry.total.cost;
+  const cost = todayCost > 0 ? ` | 💰 today: $${todayCost.toFixed(4)}` : "";
   const line =
     `📊 Tokens — fast: ${fmt(u.fast.inputTokens)}in/${fmt(u.fast.outputTokens)}out` +
     ` | smart: ${fmt(u.smart.inputTokens)}in/${fmt(u.smart.outputTokens)}out` +
     ` | total: ${fmt(u.total.inputTokens + u.total.outputTokens)}${cost}`;
   console.log(line);
 
-  // Persist to file so usage can be checked externally
-  const usageData = {
-    timestamp: new Date().toISOString(),
-    fast: u.fast,
-    smart: u.smart,
-    total: u.total,
-  };
+  // Keep last 30 days
+  const recent = history.filter(e => e.date >= new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
   await writeFile(
     join(rootDir, "usage.json"),
-    JSON.stringify(usageData, null, 2) + "\n",
+    JSON.stringify(recent, null, 2) + "\n",
     "utf-8",
   ).catch(() => {});
 }
