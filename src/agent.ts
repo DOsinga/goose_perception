@@ -263,9 +263,9 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
 
       if (notesContext) {
         body += "\n" + notesContext + "\n";
-        body += "Apple Notes are a primary source of the user's thoughts, plans, and context. " +
-          "Integrate relevant information into the wiki — update person pages, project pages, " +
-          "or create new ones as appropriate. Note titles often hint at the topic.\n\n";
+        body += "These notes are one additional signal alongside the screenshots. " +
+          "Integrate relevant new information into the wiki if it adds context " +
+          "not already captured from screen observations.\n\n";
       }
 
       body += "Update the wiki based on these observations. Brief summary of what you observed and changed.\n\n";
