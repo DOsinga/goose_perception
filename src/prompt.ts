@@ -122,10 +122,11 @@ Maintain **todos.md** — commitments the user made or accepted.
 - \`- [ ] description — who/context (date)\`
 - **Add** when you see "I will…", "I need to…", "TODO", or user agrees to a request. Today's date. Only NEW commitments from current activity — not old documents.
 - **Check off** → \`- [x]\` when you see evidence of completion.
+- **NEVER re-open** a checked-off item. If it's in Done (\`- [x]\`), leave it there. The user manually checks things off — respect that.
+- **Don't duplicate** — check BOTH Open AND Done sections before adding. If a similar item exists in either, skip it.
 - **🔔** Flag if an old todo is suddenly relevant to what's on screen.
 - **⏰ OVERDUE** if a commitment to a person is past its date.
 - Be selective: real commitments only, not passing thoughts.
-- Don't duplicate — read the list first.
 
 ## What to capture
 
