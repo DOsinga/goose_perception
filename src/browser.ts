@@ -235,8 +235,16 @@ async function handleRequest(
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(renderEditor(path, "", false));
     } else {
+      // Wiki-style: offer to create the page
+      const name = path.slice(1).replace(/\.md$/, "");
       res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(wrap("404", `<h1>Not found</h1><p><code>${path}</code></p><p><a href="/">← Home</a></p>`));
+      res.end(wrap("New page", `
+${breadcrumb(name)}
+<h1>📝 ${esc(name)}</h1>
+<p>This page doesn't exist yet.</p>
+<a href="${path}?edit" class="btn">✏️ Create it</a>
+<a href="/" class="btn" style="margin-left:0.5rem">← Home</a>
+      `));
     }
   }
 }
@@ -501,6 +509,14 @@ function wrap(title: string, body: string): string {
 </head>
 <body>
 ${body}
+<script>
+function newPage(prefix) {
+  const name = prompt('Page name:');
+  if (!name) return;
+  const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  if (slug) window.location.href = '/' + prefix + '/' + slug + '?edit';
+}
+</script>
 </body>
 </html>`;
 }
@@ -919,7 +935,7 @@ async function renderIndex(rootDir: string, wikiDir: string): Promise<string> {
     const projects = await readdir(join(wikiDir, "projects"), { withFileTypes: true });
     const mdFiles = projects.filter(e => e.isFile() && e.name.endsWith(".md")).sort((a, b) => a.name.localeCompare(b.name));
     if (mdFiles.length > 0) {
-      projectsHtml = '<div class="dashboard-section"><h2><a href="/projects">🚀 Projects</a> <a href="/projects/new-project?edit" class="btn-add" title="New project">+</a></h2><p class="tag-list">';
+      projectsHtml = '<div class="dashboard-section"><h2><a href="/projects">🚀 Projects</a> <a href="#" class="btn-add" title="New project" onclick="newPage(\'projects\')">+</a></h2><p class="tag-list">';
       projectsHtml += mdFiles.map(f => {
         const name = f.name.replace(/\.md$/, "");
         return `<a href="/projects/${name}" class="tag">${name}</a>`;
@@ -934,7 +950,7 @@ async function renderIndex(rootDir: string, wikiDir: string): Promise<string> {
     const persons = await readdir(join(wikiDir, "persons"), { withFileTypes: true });
     const mdFiles = persons.filter(e => e.isFile() && e.name.endsWith(".md")).sort((a, b) => a.name.localeCompare(b.name));
     if (mdFiles.length > 0) {
-      personsHtml = '<div class="dashboard-section"><h2><a href="/persons">👥 People</a> <a href="/persons/new-person?edit" class="btn-add" title="New person">+</a></h2><p class="tag-list">';
+      personsHtml = '<div class="dashboard-section"><h2><a href="/persons">👥 People</a> <a href="#" class="btn-add" title="New person" onclick="newPage(\'persons\')">+</a></h2><p class="tag-list">';
       personsHtml += mdFiles.map(f => {
         const name = f.name.replace(/\.md$/, "");
         return `<a href="/persons/${name}" class="tag">${name}</a>`;
@@ -979,7 +995,7 @@ async function renderDirectory(wikiDir: string, dirPath: string): Promise<string
   const sections = await buildTree(dirPath, wikiDir);
   const body = `
 ${breadcrumb(rel)}
-<h1>📁 ${rel} <a href="/${rel}/new?edit" class="btn-add" title="New page">+</a></h1>
+<h1>📁 ${rel} <a href="#" class="btn-add" title="New page" onclick="newPage('${rel}')">+</a></h1>
 ${sections}
 `;
   return wrap(rel, body);
