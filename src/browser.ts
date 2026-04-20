@@ -86,46 +86,33 @@ async function handleRequest(
     const isSectionHeader = (l: string) => /^##\s/.test(l);
 
     if (lineNum >= 0 && lineNum < lines.length && isTodoLine(lines[lineNum]!)) {
-      if (direction === "up") {
-        // Promote: move to bottom of previous section
+      // Find all section header line numbers
+      const sectionStarts: number[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        if (isSectionHeader(lines[i]!)) sectionStarts.push(i);
+      }
+
+      // Which section is this item in?
+      let currentSectionIdx = -1;
+      for (let s = sectionStarts.length - 1; s >= 0; s--) {
+        if (sectionStarts[s]! < lineNum) { currentSectionIdx = s; break; }
+      }
+
+      if (direction === "up" && currentSectionIdx > 0) {
+        // Move to end of previous section (just before current section header)
         const removed = lines.splice(lineNum, 1)[0]!;
-        let inserted = false;
-        // Walk backwards to find previous section header
-        for (let i = lineNum - 1; i >= 0; i--) {
-          if (isSectionHeader(lines[i]!)) {
-            // Found current section's header — keep looking for one before it
-            for (let j = i - 1; j >= 0; j--) {
-              if (isSectionHeader(lines[j]!)) {
-                // Insert at end of that section (just before line i)
-                lines.splice(i, 0, removed);
-                inserted = true;
-                break;
-              }
-            }
-            break;
-          }
-        }
-        if (!inserted) {
-          // Already in first section or no sections — put it back
-          lines.splice(lineNum, 0, removed);
-        }
-      } else if (direction === "down") {
-        // Demote: move to top of next section
+        // After splice, current section header shifted by 1 if it was after lineNum (it's before, so no shift)
+        const insertAt = sectionStarts[currentSectionIdx]!;
+        lines.splice(insertAt, 0, removed);
+      } else if (direction === "down" && currentSectionIdx < sectionStarts.length - 1) {
+        // Move to top of next section (after next section's header + blank lines)
+        const nextSectionHeader = sectionStarts[currentSectionIdx + 1]!;
         const removed = lines.splice(lineNum, 1)[0]!;
-        let inserted = false;
-        for (let i = lineNum; i < lines.length; i++) {
-          if (isSectionHeader(lines[i]!)) {
-            let insertAt = i + 1;
-            while (insertAt < lines.length && lines[insertAt]!.trim() === "") insertAt++;
-            lines.splice(insertAt, 0, removed);
-            inserted = true;
-            break;
-          }
-        }
-        if (!inserted) {
-          // No next section — put it back
-          lines.splice(lineNum, 0, removed);
-        }
+        // After splice, indices shift if lineNum was before nextSectionHeader
+        const adjusted = lineNum < nextSectionHeader ? nextSectionHeader - 1 : nextSectionHeader;
+        let insertAt = adjusted + 1;
+        while (insertAt < lines.length && lines[insertAt]!.trim() === "") insertAt++;
+        lines.splice(insertAt, 0, removed);
       }
       await writeFile(filePath, lines.join("\n"), "utf-8");
     }
