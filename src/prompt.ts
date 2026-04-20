@@ -130,6 +130,7 @@ Maintain **todos.md** — commitments the user made or accepted.
 - **Don't duplicate** — check BOTH Open AND Done sections before adding. If a similar item exists in either, skip it.
 - **🔔** Flag if an old todo is suddenly relevant to what's on screen.
 - **⏰ OVERDUE** if a commitment to a person is past its date.
+- If a flag (🔔/⏰/⚠️) has been removed from an item, the user dismissed it. Don't re-add the flag.
 - Be selective: real commitments only, not passing thoughts.
 - **Preserve order** — the user sets priority by reordering items. When editing todos.md, only add/remove/check individual lines. Do NOT rewrite or reorder existing items.
 - **Keep items short** — one line, factual. No action commentary ("Reach out now!", "Confirm status"). You read this file back every cycle — don't write yourself instructions.

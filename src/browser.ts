@@ -75,47 +75,21 @@ async function handleRequest(
     return;
   }
 
-  // ── POST: move todo priority up/down ──
-  if (req.method === "POST" && url.searchParams.has("moveLine")) {
-    const lineNum = parseInt(url.searchParams.get("moveLine")!, 10);
-    const direction = url.searchParams.get("dir") as "up" | "down";
+  // ── POST: dismiss urgency flag ──
+  if (req.method === "POST" && url.searchParams.has("dismissFlag")) {
+    const lineNum = parseInt(url.searchParams.get("dismissFlag")!, 10);
     const filePath = resolveFilePath(path, rootDir, wikiDir);
     const content = await readFile(filePath, "utf-8");
     const lines = content.split("\n");
-    const isTodoLine = (l: string) => /^\s*[-*] \[[ x]\] /.test(l);
-    const isSectionHeader = (l: string) => /^##\s/.test(l);
-
-    if (lineNum >= 0 && lineNum < lines.length && isTodoLine(lines[lineNum]!)) {
-      // Find all section header line numbers
-      const sectionStarts: number[] = [];
-      for (let i = 0; i < lines.length; i++) {
-        if (isSectionHeader(lines[i]!)) sectionStarts.push(i);
-      }
-
-      // Which section is this item in?
-      let currentSectionIdx = -1;
-      for (let s = sectionStarts.length - 1; s >= 0; s--) {
-        if (sectionStarts[s]! < lineNum) { currentSectionIdx = s; break; }
-      }
-
-      if (direction === "up" && currentSectionIdx > 0) {
-        // Move to end of previous section (just before current section header)
-        const removed = lines.splice(lineNum, 1)[0]!;
-        // After splice, current section header shifted by 1 if it was after lineNum (it's before, so no shift)
-        const insertAt = sectionStarts[currentSectionIdx]!;
-        lines.splice(insertAt, 0, removed);
-      } else if (direction === "down" && currentSectionIdx < sectionStarts.length - 1) {
-        // Move to top of next section (after next section's header + blank lines)
-        const nextSectionHeader = sectionStarts[currentSectionIdx + 1]!;
-        const removed = lines.splice(lineNum, 1)[0]!;
-        // After splice, indices shift if lineNum was before nextSectionHeader
-        const adjusted = lineNum < nextSectionHeader ? nextSectionHeader - 1 : nextSectionHeader;
-        let insertAt = adjusted + 1;
-        while (insertAt < lines.length && lines[insertAt]!.trim() === "") insertAt++;
-        lines.splice(insertAt, 0, removed);
-      }
-      await writeFile(filePath, lines.join("\n"), "utf-8");
+    if (lineNum >= 0 && lineNum < lines.length) {
+      lines[lineNum] = lines[lineNum]!
+        .replace(/🔔\s*/g, "")
+        .replace(/⏰\s*OVERDUE:?\s*/gi, "")
+        .replace(/⚠️\s*STALE:?\s*/gi, "")
+        .replace(/\s+/g, " ")
+        .trim();
     }
+    await writeFile(filePath, lines.join("\n"), "utf-8");
     const redirect = url.searchParams.get("redirect") || path;
     res.writeHead(302, { Location: redirect });
     res.end();
@@ -494,9 +468,10 @@ function wrap(title: string, body: string): string {
   .todo-list li:last-child { border-bottom: none; }
   .todo-text { flex: 1; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; cursor: pointer; }
   .todo-text.expanded { -webkit-line-clamp: unset; display: block; }
-  .todo-controls { display: flex; gap: 0.1rem; flex-shrink: 0; margin-top: 0.1rem; }
-  .todo-btn { background: none; border: 1px solid var(--border); color: var(--dim); border-radius: 3px; cursor: pointer; font-size: 0.65rem; padding: 0.1rem 0.25rem; line-height: 1; }
-  .todo-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .task.flagged { background: rgba(224, 175, 104, 0.1); border-left: 3px solid var(--orange); padding-left: 0.4rem; }
+  .dismiss-btn { background: none; border: none; color: var(--dim); cursor: pointer; font-size: 0.75rem; padding: 0.1rem 0.3rem; flex-shrink: 0; }
+  .dismiss-btn:hover { color: var(--red); }
+
   .desc { color: var(--dim); font-size: 0.8rem; }
   .tag-list { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.3rem 0; }
   .tag { display: inline-block; padding: 0.2rem 0.6rem; background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; font-size: 0.85rem; text-decoration: none; color: var(--fg); }
@@ -841,25 +816,20 @@ function parseTodos(content: string): { open: TodoItem[]; done: TodoItem[] } {
   return { open, done };
 }
 
-function renderTodoItem(item: TodoItem, showControls: boolean): string {
+function renderTodoItem(item: TodoItem): string {
   const checked = item.done ? "checked" : "";
-  const doneClass = item.done ? ' class="task done"' : ' class="task"';
+  const hasFlag = /🔔|⏰|⚠️/.test(item.text);
+  const cls = item.done ? "task done" : hasFlag ? "task flagged" : "task";
   const text = renderInlineMarkdown(item.text);
-
-  let controls = "";
-  if (showControls && !item.done) {
-    controls = `<span class="todo-controls">
-        <button class="todo-btn" onclick="todoAction('/todos', 'moveLine=${item.line}&dir=up&redirect=/')" title="Priority up">▲</button>
-        <button class="todo-btn" onclick="todoAction('/todos', 'moveLine=${item.line}&dir=down&redirect=/')" title="Priority down">▼</button>
-      </span>`;
-  }
-
-  // Use raw text (no HTML) for the title tooltip
   const rawText = item.text.replace(/\*\*(.+?)\*\*/g, "$1").replace(/\*(.+?)\*/g, "$1").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
 
-  return `<li${doneClass}>
+  const dismiss = hasFlag && !item.done
+    ? ` <button class="dismiss-btn" onclick="todoAction('/todos', 'dismissFlag=${item.line}&redirect=/')" title="Not urgent">✕</button>`
+    : "";
+
+  return `<li class="${cls}">
     <input type="checkbox" ${checked} onclick="todoAction('/todos', 'toggleLine=${item.line}&redirect=/')" data-line="${item.line}">
-    <span class="todo-text" title="${esc(rawText)}" onclick="this.classList.toggle('expanded')">${text}</span>${controls}
+    <span class="todo-text" title="${esc(rawText)}" onclick="this.classList.toggle('expanded')">${text}</span>${dismiss}
   </li>`;
 }
 
@@ -902,16 +872,31 @@ async function renderIndex(rootDir: string, wikiDir: string): Promise<string> {
       sections.get(key)!.push(item);
     }
 
+    // Separate flagged (urgent) items from the rest
+    const flagged = open.filter(i => /🔔|⏰|⚠️/.test(i.text));
+
     todosHtml = '<div class="dashboard-section"><h2><a href="/todos">📋 TODOs</a> <span class="badge">' + open.length + ' open</span> <a href="/todos?edit" class="btn-add" title="Edit todos">✏️</a></h2>';
     if (open.length === 0) {
       todosHtml += '<p style="color: var(--dim)">No open todos!</p>';
     } else {
+      // Show flagged items first
+      if (flagged.length > 0) {
+        todosHtml += `<h3>🚨 Needs attention</h3><ul class="todo-list">`;
+        for (const item of flagged) {
+          todosHtml += renderTodoItem(item);
+        }
+        todosHtml += "</ul>";
+      }
+      // Then per-section (excluding flagged to avoid dupes)
+      const flaggedLines = new Set(flagged.map(i => i.line));
       for (const [section, items] of sections) {
-        const shown = items.slice(0, MAX_TODOS_PER_SECTION);
-        const hidden = items.length - shown.length;
+        const unflagged = items.filter(i => !flaggedLines.has(i.line));
+        if (unflagged.length === 0) continue;
+        const shown = unflagged.slice(0, MAX_TODOS_PER_SECTION);
+        const hidden = unflagged.length - shown.length;
         todosHtml += `<h3>${esc(section)}</h3><ul class="todo-list">`;
         for (const item of shown) {
-          todosHtml += renderTodoItem(item, true);
+          todosHtml += renderTodoItem(item);
         }
         todosHtml += "</ul>";
         if (hidden > 0) {
