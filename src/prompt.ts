@@ -127,6 +127,7 @@ Maintain **todos.md** — commitments the user made or accepted.
 - **🔔** Flag if an old todo is suddenly relevant to what's on screen.
 - **⏰ OVERDUE** if a commitment to a person is past its date.
 - Be selective: real commitments only, not passing thoughts.
+- **Preserve order** — the user sets priority by reordering items. When editing todos.md, only add/remove/check individual lines. Do NOT rewrite or reorder existing items.
 
 ## What to capture
 
