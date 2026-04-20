@@ -124,6 +124,7 @@ Structure:
 Maintain **todos.md** — commitments the user made or accepted.
 
 - \`- [ ] description — who/context (date)\`
+- Group by project/topic sections (e.g. \`## mesh-llm\`, \`## Goose\`, \`## Block / work\`). No priority sections — no "High priority" or "Urgent".
 - **Add** when you see "I will…", "I need to…", "TODO", or user agrees to a request. Today's date. Only NEW commitments from current activity — not old documents.
 - **Check off** → \`- [x]\` when you see evidence of completion.
 - **NEVER un-check or re-open a \`- [x]\` item.** If something is checked off, the user did that. You do not get to override the user. Even if you see no evidence it was completed — the user decides, not you.
