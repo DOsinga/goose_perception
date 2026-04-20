@@ -872,28 +872,13 @@ async function renderIndex(rootDir: string, wikiDir: string): Promise<string> {
       sections.get(key)!.push(item);
     }
 
-    // Separate flagged (urgent) items from the rest
-    const flagged = open.filter(i => /🔔|⏰|⚠️/.test(i.text));
-
     todosHtml = '<div class="dashboard-section"><h2><a href="/todos">📋 TODOs</a> <span class="badge">' + open.length + ' open</span> <a href="/todos?edit" class="btn-add" title="Edit todos">✏️</a></h2>';
     if (open.length === 0) {
       todosHtml += '<p style="color: var(--dim)">No open todos!</p>';
     } else {
-      // Show flagged items first
-      if (flagged.length > 0) {
-        todosHtml += `<h3>🚨 Needs attention</h3><ul class="todo-list">`;
-        for (const item of flagged) {
-          todosHtml += renderTodoItem(item);
-        }
-        todosHtml += "</ul>";
-      }
-      // Then per-section (excluding flagged to avoid dupes)
-      const flaggedLines = new Set(flagged.map(i => i.line));
       for (const [section, items] of sections) {
-        const unflagged = items.filter(i => !flaggedLines.has(i.line));
-        if (unflagged.length === 0) continue;
-        const shown = unflagged.slice(0, MAX_TODOS_PER_SECTION);
-        const hidden = unflagged.length - shown.length;
+        const shown = items.slice(0, MAX_TODOS_PER_SECTION);
+        const hidden = items.length - shown.length;
         todosHtml += `<h3>${esc(section)}</h3><ul class="todo-list">`;
         for (const item of shown) {
           todosHtml += renderTodoItem(item);
