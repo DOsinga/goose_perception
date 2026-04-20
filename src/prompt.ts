@@ -40,49 +40,24 @@ If the page looks good, say so briefly. Don't change things for the sake of it.
 Update index.md and append to log.md if you make edits.
 `;
 
-const DEFAULT_TODO_REVIEW_PROMPT = `<!-- This is the todo review prompt, sent periodically during idle time.
-     {{WIKI_DIR}}, {{WIKI_SUMMARY}}, and {{TODAY}} are replaced automatically. -->
+const DEFAULT_TODO_REVIEW_PROMPT = `<!-- Todo review prompt, sent periodically during idle time.
+     {{WIKI_DIR}}, {{WIKI_SUMMARY}}, {{TODAY}} are replaced automatically. -->
 
-Review and triage todos.md in {{WIKI_DIR}}.
+Review todos.md in {{WIKI_DIR}}. Today is {{TODAY}}.
 
-Today's date is {{TODAY}}.
+**Rules: Never un-check \`- [x]\` items. Never re-add dismissed flags. Keep items short.**
 
-Read todos.md, then read the recent daily notes and any relevant project pages
-to understand current context.
+Read todos.md and recent daily notes, then:
 
-**CRITICAL: Items the user has checked off (- [x]) are DONE. Never un-check,
-re-open, re-add, or move them back to Open. The user's check-offs are final.**
+1. **Commitments to people** — any open todo that promises something to a named person
+   with a date that has passed? Add ⏰ OVERDUE (only if not already flagged and flag
+   wasn't previously dismissed).
+2. **Stale** — open todo >7 days old with no recent activity? Add ⚠️ STALE.
+3. **Relevant** — open todo that connects to today's activity? Add 🔔.
+4. **Cleanup** — deduplicate, move checked items to Done section, remove Done items >14 days old.
 
-Then:
-
-## Staleness check
-
-- Any todo with a date more than 7 days old and no recent activity? Mark it ⚠️ STALE.
-- Any OPEN todo with a specific date that has passed? Flag it ⏰ OVERDUE if it
-  involves another person. Otherwise mark ⚠️ STALE.
-- Any todo older than 30 days with no progress? Move it to an "## Archive" section
-  at the bottom — not deleted, just deprioritised.
-
-## Priority review
-
-- Has recent activity made a todo more urgent? Bump it up. Add a note why.
-- Has a todo become irrelevant based on recent events? Note it or archive it.
-- Any forgotten todo that relates to something the user is actively working on?
-  Flag it: "🔔 This is relevant to what you're doing today."
-
-## Accountability
-
-- Any commitment to another person that's overdue? Flag it prominently:
-  "⏰ OVERDUE: promised [person] on [date]"
-- Things promised to people are higher priority than self-directed tasks.
-
-## Cleanup
-
-- Deduplicate — same todo phrased differently in multiple sections?
-- Done items that are old (>14 days)? Remove from Done to keep the list clean.
-- Keep the format consistent: \`- [ ] description — context (date)\`
-
-Be concise. Only make changes that matter. Update log.md if you edit todos.md.
+Don't reorder items. Don't rewrite item text. Only add/remove flags, move checked items
+to Done, and clean up duplicates. Update log.md if you change anything.
 `;
 
 const DEFAULT_PROMPT = `<!-- System prompt for the perception daemon. HTML comments are stripped.

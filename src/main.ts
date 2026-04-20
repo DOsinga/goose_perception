@@ -348,7 +348,7 @@ async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal)
   const BURST_COOLDOWN_MS = 60_000;   // 1 min cooldown after a burst (context switch)
   const IDLE_WAIT_MS = 30_000;        // check for notes/lint every 30s when idle
   const BATCH_COLLECT_MS = 30_000;    // wait 30s to collect extractions into a batch
-  const TODO_REVIEW_INTERVAL_MS = 4 * 60 * 60 * 1000; // review todos every 4 hours
+  const TODO_REVIEW_INTERVAL_MS = 1 * 60 * 60 * 1000; // review todos every hour
 
   let consecutiveErrors = 0;
   let lastBatchText = "";
