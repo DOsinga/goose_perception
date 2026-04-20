@@ -486,7 +486,8 @@ function wrap(title: string, body: string): string {
   .todo-list { margin: 0; padding: 0; }
   .todo-list li { padding: 0.4rem 0; border-bottom: 1px solid var(--border); display: flex; align-items: flex-start; gap: 0.4rem; font-size: 0.85rem; line-height: 1.4; }
   .todo-list li:last-child { border-bottom: none; }
-  .todo-text { flex: 1; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .todo-text { flex: 1; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; cursor: pointer; }
+  .todo-text.expanded { -webkit-line-clamp: unset; display: block; }
   .todo-controls { display: flex; gap: 0.1rem; flex-shrink: 0; margin-top: 0.1rem; }
   .todo-btn { background: none; border: 1px solid var(--border); color: var(--dim); border-radius: 3px; cursor: pointer; font-size: 0.65rem; padding: 0.1rem 0.25rem; line-height: 1; }
   .todo-btn:hover { color: var(--accent); border-color: var(--accent); }
@@ -494,6 +495,8 @@ function wrap(title: string, body: string): string {
   .tag-list { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.3rem 0; }
   .tag { display: inline-block; padding: 0.2rem 0.6rem; background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; font-size: 0.85rem; text-decoration: none; color: var(--fg); }
   .tag:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-add { font-size: 0.75rem; color: var(--dim); text-decoration: none; border: 1px solid var(--border); border-radius: 3px; padding: 0.1rem 0.4rem; vertical-align: middle; }
+  .btn-add:hover { color: var(--accent); border-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -837,9 +840,12 @@ function renderTodoItem(item: TodoItem, showControls: boolean): string {
       </span>`;
   }
 
+  // Use raw text (no HTML) for the title tooltip
+  const rawText = item.text.replace(/\*\*(.+?)\*\*/g, "$1").replace(/\*(.+?)\*/g, "$1").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+
   return `<li${doneClass}>
     <input type="checkbox" ${checked} onclick="todoAction('/todos', 'toggleLine=${item.line}&redirect=/')" data-line="${item.line}">
-    <span class="todo-text">${text}</span>${controls}
+    <span class="todo-text" title="${esc(rawText)}" onclick="this.classList.toggle('expanded')">${text}</span>${controls}
   </li>`;
 }
 
@@ -882,7 +888,7 @@ async function renderIndex(rootDir: string, wikiDir: string): Promise<string> {
       sections.get(key)!.push(item);
     }
 
-    todosHtml = '<div class="dashboard-section"><h2><a href="/todos">📋 TODOs</a> <span class="badge">' + open.length + ' open</span></h2>';
+    todosHtml = '<div class="dashboard-section"><h2><a href="/todos">📋 TODOs</a> <span class="badge">' + open.length + ' open</span> <a href="/todos?edit" class="btn-add" title="Edit todos">✏️</a></h2>';
     if (open.length === 0) {
       todosHtml += '<p style="color: var(--dim)">No open todos!</p>';
     } else {
@@ -913,7 +919,7 @@ async function renderIndex(rootDir: string, wikiDir: string): Promise<string> {
     const projects = await readdir(join(wikiDir, "projects"), { withFileTypes: true });
     const mdFiles = projects.filter(e => e.isFile() && e.name.endsWith(".md")).sort((a, b) => a.name.localeCompare(b.name));
     if (mdFiles.length > 0) {
-      projectsHtml = '<div class="dashboard-section"><h2><a href="/projects">🚀 Projects</a></h2><p class="tag-list">';
+      projectsHtml = '<div class="dashboard-section"><h2><a href="/projects">🚀 Projects</a> <a href="/projects/new-project?edit" class="btn-add" title="New project">+</a></h2><p class="tag-list">';
       projectsHtml += mdFiles.map(f => {
         const name = f.name.replace(/\.md$/, "");
         return `<a href="/projects/${name}" class="tag">${name}</a>`;
@@ -928,7 +934,7 @@ async function renderIndex(rootDir: string, wikiDir: string): Promise<string> {
     const persons = await readdir(join(wikiDir, "persons"), { withFileTypes: true });
     const mdFiles = persons.filter(e => e.isFile() && e.name.endsWith(".md")).sort((a, b) => a.name.localeCompare(b.name));
     if (mdFiles.length > 0) {
-      personsHtml = '<div class="dashboard-section"><h2><a href="/persons">👥 People</a></h2><p class="tag-list">';
+      personsHtml = '<div class="dashboard-section"><h2><a href="/persons">👥 People</a> <a href="/persons/new-person?edit" class="btn-add" title="New person">+</a></h2><p class="tag-list">';
       personsHtml += mdFiles.map(f => {
         const name = f.name.replace(/\.md$/, "");
         return `<a href="/persons/${name}" class="tag">${name}</a>`;
@@ -973,7 +979,7 @@ async function renderDirectory(wikiDir: string, dirPath: string): Promise<string
   const sections = await buildTree(dirPath, wikiDir);
   const body = `
 ${breadcrumb(rel)}
-<h1>📁 ${rel}</h1>
+<h1>📁 ${rel} <a href="/${rel}/new?edit" class="btn-add" title="New page">+</a></h1>
 ${sections}
 `;
   return wrap(rel, body);
