@@ -45,19 +45,15 @@ const DEFAULT_TODO_REVIEW_PROMPT = `<!-- Todo review prompt, sent periodically d
 
 Review todos.md in {{WIKI_DIR}}. Today is {{TODAY}}.
 
-**Rules: Never un-check \`- [x]\` items. Never re-add dismissed flags. Keep items short.**
+**Rules: Never un-check \`- [x]\` items. Don't rewrite or reorder existing items.**
 
-Read todos.md and recent daily notes, then:
+Read todos.md, then:
 
-1. **Commitments to people** — any open todo that promises something to a named person
-   with a date that has passed? Add ⏰ OVERDUE (only if not already flagged and flag
-   wasn't previously dismissed).
-2. **Stale** — open todo >7 days old with no recent activity? Add ⚠️ STALE.
-3. **Relevant** — open todo that connects to today's activity? Add 🔔.
-4. **Cleanup** — deduplicate, move checked items to Done section, remove Done items >14 days old.
+1. **Move checked items** — any \`- [x]\` outside the Done section? Move it there.
+2. **Deduplicate** — same todo in multiple sections? Keep one, remove the other.
+3. **Old done items** — Done items >14 days old? Remove them.
 
-Don't reorder items. Don't rewrite item text. Only add/remove flags, move checked items
-to Done, and clean up duplicates. Update log.md if you change anything.
+That's it. Don't add flags, don't rewrite text, don't reorder. Update log.md if you change anything.
 `;
 
 const DEFAULT_PROMPT = `<!-- System prompt for the perception daemon. HTML comments are stripped.
@@ -102,14 +98,11 @@ Maintain **todos.md** — commitments the user made or accepted.
 - Group by project/topic sections (e.g. \`## mesh-llm\`, \`## Goose\`, \`## Block / work\`). No priority sections — no "High priority" or "Urgent".
 - **Add** when you see "I will…", "I need to…", "TODO", or user agrees to a request. Today's date. Only NEW commitments from current activity — not old documents.
 - **Check off** → \`- [x]\` when you see evidence of completion.
-- **NEVER un-check or re-open a \`- [x]\` item.** If something is checked off, the user did that. You do not get to override the user. Even if you see no evidence it was completed — the user decides, not you.
-- **Don't duplicate** — check BOTH Open AND Done sections before adding. If a similar item exists in either, skip it.
-- **🔔** Flag if an old todo is suddenly relevant to what's on screen.
-- **⏰ OVERDUE** if a commitment to a person is past its date.
-- If a flag (🔔/⏰/⚠️) has been removed from an item, the user dismissed it. Don't re-add the flag.
+- **NEVER un-check or re-open a \`- [x]\` item.** The user decides what's done, not you.
+- **Don't duplicate** — check BOTH Open AND Done before adding.
 - Be selective: real commitments only, not passing thoughts.
-- **Preserve order** — the user sets priority by reordering items. When editing todos.md, only add/remove/check individual lines. Do NOT rewrite or reorder existing items.
-- **Keep items short** — one line, factual. No action commentary ("Reach out now!", "Confirm status"). You read this file back every cycle — don't write yourself instructions.
+- **Don't rewrite or reorder** existing items. Only add new lines or check off existing ones.
+- **Keep items short** — one line, factual. No commentary or self-instructions.
 
 ## What to capture
 

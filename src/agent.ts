@@ -269,11 +269,8 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
       }
 
       body += "Update the wiki based on these observations. Brief summary of what you observed and changed.\n\n";
-      body += "Also: read todos.md and check if any of these observations relate to OPEN todos. " +
-        "If you see evidence an open todo was completed, check it off (move to Done). " +
-        "If an old/forgotten open todo is suddenly relevant to what's on screen, flag it with 🔔. " +
-        "NEVER touch Done items (- [x]). Never re-open, un-check, or re-add something already in Done. " +
-        "Preserve the existing order of items — only add new lines or check off existing ones.";
+      body += "Also: read todos.md. If you see evidence an open todo was completed, check it off. " +
+        "NEVER un-check or re-open done items (- [x]). Don't rewrite or reorder existing items.";
 
       streamBuffer.length = 0;
 

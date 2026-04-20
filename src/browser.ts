@@ -75,27 +75,6 @@ async function handleRequest(
     return;
   }
 
-  // ── POST: dismiss urgency flag ──
-  if (req.method === "POST" && url.searchParams.has("dismissFlag")) {
-    const lineNum = parseInt(url.searchParams.get("dismissFlag")!, 10);
-    const filePath = resolveFilePath(path, rootDir, wikiDir);
-    const content = await readFile(filePath, "utf-8");
-    const lines = content.split("\n");
-    if (lineNum >= 0 && lineNum < lines.length) {
-      lines[lineNum] = lines[lineNum]!
-        .replace(/🔔\s*/g, "")
-        .replace(/⏰\s*OVERDUE:?\s*/gi, "")
-        .replace(/⚠️\s*STALE:?\s*/gi, "")
-        .replace(/\s+/g, " ")
-        .trim();
-    }
-    await writeFile(filePath, lines.join("\n"), "utf-8");
-    const redirect = url.searchParams.get("redirect") || path;
-    res.writeHead(302, { Location: redirect });
-    res.end();
-    return;
-  }
-
   // ── POST: save file ──
   if (req.method === "POST") {
     const body = await readBody(req);
@@ -468,9 +447,7 @@ function wrap(title: string, body: string): string {
   .todo-list li:last-child { border-bottom: none; }
   .todo-text { flex: 1; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; cursor: pointer; }
   .todo-text.expanded { -webkit-line-clamp: unset; display: block; }
-  .task.flagged { background: rgba(224, 175, 104, 0.1); border-left: 3px solid var(--orange); padding-left: 0.4rem; }
-  .dismiss-btn { background: none; border: none; color: var(--dim); cursor: pointer; font-size: 0.75rem; padding: 0.1rem 0.3rem; flex-shrink: 0; }
-  .dismiss-btn:hover { color: var(--red); }
+
 
   .desc { color: var(--dim); font-size: 0.8rem; }
   .tag-list { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.3rem 0; }
@@ -818,18 +795,13 @@ function parseTodos(content: string): { open: TodoItem[]; done: TodoItem[] } {
 
 function renderTodoItem(item: TodoItem): string {
   const checked = item.done ? "checked" : "";
-  const hasFlag = /🔔|⏰|⚠️/.test(item.text);
-  const cls = item.done ? "task done" : hasFlag ? "task flagged" : "task";
+  const cls = item.done ? "task done" : "task";
   const text = renderInlineMarkdown(item.text);
   const rawText = item.text.replace(/\*\*(.+?)\*\*/g, "$1").replace(/\*(.+?)\*/g, "$1").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
 
-  const dismiss = hasFlag && !item.done
-    ? ` <button class="dismiss-btn" onclick="todoAction('/todos', 'dismissFlag=${item.line}&redirect=/')" title="Not urgent">✕</button>`
-    : "";
-
   return `<li class="${cls}">
     <input type="checkbox" ${checked} onclick="todoAction('/todos', 'toggleLine=${item.line}&redirect=/')" data-line="${item.line}">
-    <span class="todo-text" title="${esc(rawText)}" onclick="this.classList.toggle('expanded')">${text}</span>${dismiss}
+    <span class="todo-text" title="${esc(rawText)}" onclick="this.classList.toggle('expanded')">${text}</span>
   </li>`;
 }
 
