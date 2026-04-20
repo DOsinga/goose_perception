@@ -904,7 +904,7 @@ ${breadcrumb("")}
 <h1>🦆 Perception Wiki</h1>
 <p style="color: var(--dim)">Your second brain, built from desktop screenshots.</p>
 <p style="font-size: 0.85rem">
-  📄 <a href="/owner">Owner</a> · <a href="/index">Index</a> · <a href="/log">Log</a> · <a href="/todos">TODOs</a> · <a href="/dates">Daily notes</a>
+  📄 <a href="/owner">Owner</a> · <a href="/log">Log</a> · <a href="/todos">TODOs</a> · <a href="/dates">Daily notes</a>
   ${configLinks ? `&nbsp;|&nbsp; ⚙️ ${configLinks}` : ""}
 </p>
 <hr>

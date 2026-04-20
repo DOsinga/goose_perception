@@ -17,17 +17,6 @@ export async function ensureWikiDirs(wikiDir: string): Promise<void> {
  */
 export async function getWikiSummary(wikiDir: string): Promise<string> {
   await ensureWikiDirs(wikiDir);
-
-  // Prefer index.md — the agent-maintained catalog
-  const indexPath = join(wikiDir, "index.md");
-  try {
-    await access(indexPath);
-    const index = await readFile(indexPath, "utf-8");
-    return `(from index.md)\n${index}`;
-  } catch {
-    // No index yet — fall back to file listing
-  }
-
   return buildFileListing(wikiDir);
 }
 

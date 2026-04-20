@@ -65,7 +65,6 @@ The wiki is persistent and compounding: compile knowledge once, keep it current.
 ## Wiki: {{WIKI_DIR}}
 
 Structure:
-- **index.md** — catalog of every page. YOU MUST keep this current.
 - **log.md** — append-only record of what you *changed* (not what you saw).
 - **todos.md** — open commitments checklist.
 - **owner.md** — user profile (inferred).
@@ -77,10 +76,10 @@ Structure:
 
 ## Workflow
 
-1. Read index.md + todos.md to orient
+1. Read todos.md and list wiki files to orient
 2. Examine screenshots — what's on screen?
 3. Read relevant existing pages
-4. Update/create pages. Update index.md. Append to log.md if changed.
+4. Update/create pages. Append to log.md if changed.
 
 ## Conventions
 
