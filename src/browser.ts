@@ -87,23 +87,34 @@ async function handleRequest(
 
     if (lineNum >= 0 && lineNum < lines.length && isTodoLine(lines[lineNum]!)) {
       if (direction === "up") {
-        // Swap with previous todo in same section
+        // Promote: move to bottom of previous section
+        const removed = lines.splice(lineNum, 1)[0]!;
+        let inserted = false;
+        // Walk backwards to find previous section header
         for (let i = lineNum - 1; i >= 0; i--) {
-          if (isSectionHeader(lines[i]!)) break; // don't cross sections going up
-          if (isTodoLine(lines[i]!)) {
-            const tmp = lines[lineNum]!;
-            lines[lineNum] = lines[i]!;
-            lines[i] = tmp;
+          if (isSectionHeader(lines[i]!)) {
+            // Found current section's header — keep looking for one before it
+            for (let j = i - 1; j >= 0; j--) {
+              if (isSectionHeader(lines[j]!)) {
+                // Insert at end of that section (just before line i)
+                lines.splice(i, 0, removed);
+                inserted = true;
+                break;
+              }
+            }
             break;
           }
         }
+        if (!inserted) {
+          // Already in first section or no sections — put it back
+          lines.splice(lineNum, 0, removed);
+        }
       } else if (direction === "down") {
-        // Demote: remove from current position and insert at top of next section
+        // Demote: move to top of next section
         const removed = lines.splice(lineNum, 1)[0]!;
         let inserted = false;
         for (let i = lineNum; i < lines.length; i++) {
           if (isSectionHeader(lines[i]!)) {
-            // Insert after this header (skip blank lines after header)
             let insertAt = i + 1;
             while (insertAt < lines.length && lines[insertAt]!.trim() === "") insertAt++;
             lines.splice(insertAt, 0, removed);
@@ -112,8 +123,8 @@ async function handleRequest(
           }
         }
         if (!inserted) {
-          // No next section — just append before Done/Archive
-          lines.push(removed);
+          // No next section — put it back
+          lines.splice(lineNum, 0, removed);
         }
       }
       await writeFile(filePath, lines.join("\n"), "utf-8");
