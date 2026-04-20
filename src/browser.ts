@@ -484,10 +484,11 @@ function wrap(title: string, body: string): string {
   .dashboard-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
   @media (max-width: 700px) { .dashboard-columns { grid-template-columns: 1fr; } }
   .todo-list { margin: 0; padding: 0; }
-  .todo-list li { padding: 0.3rem 0; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 0.3rem; }
+  .todo-list li { padding: 0.4rem 0; border-bottom: 1px solid var(--border); display: flex; align-items: flex-start; gap: 0.4rem; font-size: 0.85rem; line-height: 1.4; }
   .todo-list li:last-child { border-bottom: none; }
-  .todo-controls { margin-left: auto; display: flex; gap: 0.1rem; flex-shrink: 0; }
-  .todo-btn { background: none; border: 1px solid var(--border); color: var(--dim); border-radius: 3px; cursor: pointer; font-size: 0.7rem; padding: 0.1rem 0.3rem; line-height: 1; }
+  .todo-text { flex: 1; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .todo-controls { display: flex; gap: 0.1rem; flex-shrink: 0; margin-top: 0.1rem; }
+  .todo-btn { background: none; border: 1px solid var(--border); color: var(--dim); border-radius: 3px; cursor: pointer; font-size: 0.65rem; padding: 0.1rem 0.25rem; line-height: 1; }
   .todo-btn:hover { color: var(--accent); border-color: var(--accent); }
   .desc { color: var(--dim); font-size: 0.8rem; }
   .tag-list { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.3rem 0; }
@@ -830,8 +831,7 @@ function renderTodoItem(item: TodoItem, showControls: boolean): string {
 
   let controls = "";
   if (showControls && !item.done) {
-    controls = `
-      <span class="todo-controls">
+    controls = `<span class="todo-controls">
         <button class="todo-btn" onclick="todoAction('/todos', 'moveLine=${item.line}&dir=up&redirect=/')" title="Priority up">▲</button>
         <button class="todo-btn" onclick="todoAction('/todos', 'moveLine=${item.line}&dir=down&redirect=/')" title="Priority down">▼</button>
       </span>`;
@@ -839,7 +839,7 @@ function renderTodoItem(item: TodoItem, showControls: boolean): string {
 
   return `<li${doneClass}>
     <input type="checkbox" ${checked} onclick="todoAction('/todos', 'toggleLine=${item.line}&redirect=/')" data-line="${item.line}">
-    ${text}${controls}
+    <span class="todo-text">${text}</span>${controls}
   </li>`;
 }
 
