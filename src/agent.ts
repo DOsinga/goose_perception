@@ -13,7 +13,7 @@ import type {
 import { ndJsonStream } from "@agentclientprotocol/sdk";
 import { GooseClient } from "@aaif/goose-sdk";
 import type { Screenshot } from "./screenshot.js";
-import { loadSystemPrompt, loadLintPrompt, buildPromptBlocks } from "./prompt.js";
+import { loadSystemPrompt, loadLintPrompt, loadTodoReviewPrompt, buildPromptBlocks } from "./prompt.js";
 import { getWikiSummary, getRecentLog } from "./wiki.js";
 
 export interface AgentConfig {
@@ -54,6 +54,7 @@ export interface AgentHandle {
   sendExtractions(extractions: Extraction[], notesContext?: string): Promise<string>;
   sendScreenshots(screenshots: Screenshot[]): Promise<string>;
   sendLint(file: string): Promise<string>;
+  sendTodoReview(): Promise<string>;
   getUsage(): { fast: TokenUsage; smart: TokenUsage; total: TokenUsage };
   listProviders(): Promise<ProviderInfo[]>;
   listModels(provider: string): Promise<{ models: ModelInfo[]; current: string }>;
@@ -267,7 +268,11 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
           "or create new ones as appropriate. Note titles often hint at the topic.\n\n";
       }
 
-      body += "Update the wiki based on these observations. Brief summary of what you observed and changed.";
+      body += "Update the wiki based on these observations. Brief summary of what you observed and changed.\n\n";
+      body += "Also: read todos.md and check if any of these observations relate to open todos. " +
+        "If you see evidence a todo was completed, check it off. " +
+        "If an old/forgotten todo is suddenly relevant to what's on screen, flag it with 🔔. " +
+        "If a commitment to another person is overdue, flag it with ⏰ OVERDUE.";
 
       streamBuffer.length = 0;
 
@@ -320,6 +325,23 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
         prompt: [{ type: "text", text: lintPrompt } as ContentBlock],
       });
       trackPromptUsage("smart", lintResp, lintPrompt);
+
+      return streamBuffer.join("");
+    },
+
+    async sendTodoReview(): Promise<string> {
+      const sessionId = await createSession("smart");
+
+      const wikiSummary = await getWikiSummary(config.wikiDir);
+      const todoPrompt = await loadTodoReviewPrompt(config.rootDir, config.wikiDir, wikiSummary);
+
+      streamBuffer.length = 0;
+
+      const todoResp = await client.prompt({
+        sessionId,
+        prompt: [{ type: "text", text: todoPrompt } as ContentBlock],
+      });
+      trackPromptUsage("smart", todoResp, todoPrompt);
 
       return streamBuffer.join("");
     },

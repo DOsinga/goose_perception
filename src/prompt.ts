@@ -4,6 +4,7 @@ import type { Screenshot } from "./screenshot.js";
 
 const PROMPT_FILENAME = "prompt.md";
 const LINT_PROMPT_FILENAME = "lint.md";
+const TODO_REVIEW_PROMPT_FILENAME = "todo-review.md";
 
 const DEFAULT_LINT_PROMPT = `<!-- This is the lint prompt, sent when the daemon has idle time
      and a wiki page hasn't been reviewed in at least 24 hours.
@@ -37,6 +38,47 @@ should read like a wiki article, not a log.
 
 If the page looks good, say so briefly. Don't change things for the sake of it.
 Update index.md and append to log.md if you make edits.
+`;
+
+const DEFAULT_TODO_REVIEW_PROMPT = `<!-- This is the todo review prompt, sent periodically during idle time.
+     {{WIKI_DIR}}, {{WIKI_SUMMARY}}, and {{TODAY}} are replaced automatically. -->
+
+Review and triage todos.md in {{WIKI_DIR}}.
+
+Today's date is {{TODAY}}.
+
+Read todos.md, then read the recent daily notes and any relevant project pages
+to understand current context. Then:
+
+## Staleness check
+
+- Any todo with a date more than 7 days old and no recent activity? Mark it ⚠️ STALE.
+- Any todo with a specific date that has passed (e.g. "call james tomorrow (2026-04-20)"
+  and today is 2026-04-22)? Either check it off if evidence suggests it happened,
+  or update the date/context.
+- Any todo older than 30 days with no progress? Move it to an "## Archive" section
+  at the bottom — not deleted, just deprioritised.
+
+## Priority review
+
+- Has recent activity made a todo more urgent? Bump it up. Add a note why.
+- Has a todo become irrelevant based on recent events? Note it or archive it.
+- Any forgotten todo that relates to something the user is actively working on?
+  Flag it: "🔔 This is relevant to what you're doing today."
+
+## Accountability
+
+- Any commitment to another person that's overdue? Flag it prominently:
+  "⏰ OVERDUE: promised [person] on [date]"
+- Things promised to people are higher priority than self-directed tasks.
+
+## Cleanup
+
+- Deduplicate — same todo phrased differently in multiple sections?
+- Done items that are old (>14 days)? Remove from Done to keep the list clean.
+- Keep the format consistent: \`- [ ] description — context (date)\`
+
+Be concise. Only make changes that matter. Update log.md if you edit todos.md.
 `;
 
 const DEFAULT_PROMPT = `<!-- This is the system prompt for your perception daemon.
@@ -208,7 +250,7 @@ Prefer appending to daily notes rather than rewriting them.
 export async function ensurePromptFiles(rootDir: string): Promise<boolean> {
   await mkdir(rootDir, { recursive: true });
   let created = false;
-  for (const [filename, content] of [[PROMPT_FILENAME, DEFAULT_PROMPT], [LINT_PROMPT_FILENAME, DEFAULT_LINT_PROMPT]]) {
+  for (const [filename, content] of [[PROMPT_FILENAME, DEFAULT_PROMPT], [LINT_PROMPT_FILENAME, DEFAULT_LINT_PROMPT], [TODO_REVIEW_PROMPT_FILENAME, DEFAULT_TODO_REVIEW_PROMPT]]) {
     const path = join(rootDir, filename);
     try {
       await access(path);
@@ -257,6 +299,26 @@ export async function loadLintPrompt(
   raw = raw.replace(/\{\{WIKI_DIR\}\}/g, wikiDir);
   raw = raw.replace(/\{\{WIKI_SUMMARY\}\}/g, wikiSummary);
   raw = raw.replace(/\{\{LINT_FILE\}\}/g, lintFile);
+  raw = raw.replace(/\n{3,}/g, "\n\n");
+
+  return raw.trim();
+}
+
+/**
+ * Load and prepare the todo review prompt, substituting placeholders.
+ */
+export async function loadTodoReviewPrompt(
+  rootDir: string,
+  wikiDir: string,
+  wikiSummary: string,
+): Promise<string> {
+  const path = join(rootDir, TODO_REVIEW_PROMPT_FILENAME);
+  let raw = await readFile(path, "utf-8");
+
+  raw = raw.replace(/<!--[\s\S]*?-->/g, "");
+  raw = raw.replace(/\{\{WIKI_DIR\}\}/g, wikiDir);
+  raw = raw.replace(/\{\{WIKI_SUMMARY\}\}/g, wikiSummary);
+  raw = raw.replace(/\{\{TODAY\}\}/g, new Date().toISOString().slice(0, 10));
   raw = raw.replace(/\n{3,}/g, "\n\n");
 
   return raw.trim();

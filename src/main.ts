@@ -348,10 +348,12 @@ async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal)
   const BURST_COOLDOWN_MS = 60_000;   // 1 min cooldown after a burst (context switch)
   const IDLE_WAIT_MS = 30_000;        // check for notes/lint every 30s when idle
   const BATCH_COLLECT_MS = 30_000;    // wait 30s to collect extractions into a batch
+  const TODO_REVIEW_INTERVAL_MS = 4 * 60 * 60 * 1000; // review todos every 4 hours
 
   let consecutiveErrors = 0;
   let lastBatchText = "";
   let consecutiveSkips = 0;
+  let lastTodoReview = 0;
   let cooldownMs = MIN_COOLDOWN_MS;
   let lastUpdateTime = 0;
 
@@ -384,20 +386,35 @@ async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal)
           console.error(`📝 Notes check failed:`, err instanceof Error ? err.message : err);
         }
 
-        // No notes changes either — try linting
-        const lintTarget = await pickLintTarget(config.rootDir);
-        if (lintTarget) {
+        // No notes changes either — try todo review or linting
+        const timeSinceTodoReview = Date.now() - lastTodoReview;
+        if (timeSinceTodoReview >= TODO_REVIEW_INTERVAL_MS) {
           console.log(`\n${"─".repeat(60)}`);
-          console.log(`🧹 Linting: ${lintTarget}`);
+          console.log(`📋 Todo review (every ${TODO_REVIEW_INTERVAL_MS / 3600000}h)`);
           console.log(`${"─".repeat(60)}`);
 
           const startTime = Date.now();
-          await agent.sendLint(lintTarget);
-          await markLinted(config.rootDir, lintTarget);
+          await agent.sendTodoReview();
           await recordChangedFiles(config.rootDir, config.wikiDir, startTime);
-          console.log(`\n✅ Lint complete: ${lintTarget}`);
+          console.log(`\n✅ Todo review complete`);
           logUsage(agent, config.rootDir);
+          lastTodoReview = Date.now();
           lastUpdateTime = Date.now();
+        } else {
+          const lintTarget = await pickLintTarget(config.rootDir);
+          if (lintTarget) {
+            console.log(`\n${"─".repeat(60)}`);
+            console.log(`🧹 Linting: ${lintTarget}`);
+            console.log(`${"─".repeat(60)}`);
+
+            const startTime = Date.now();
+            await agent.sendLint(lintTarget);
+            await markLinted(config.rootDir, lintTarget);
+            await recordChangedFiles(config.rootDir, config.wikiDir, startTime);
+            console.log(`\n✅ Lint complete: ${lintTarget}`);
+            logUsage(agent, config.rootDir);
+            lastUpdateTime = Date.now();
+          }
         }
 
         await sleep(IDLE_WAIT_MS);
