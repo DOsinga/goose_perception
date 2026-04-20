@@ -132,6 +132,7 @@ Maintain **todos.md** — commitments the user made or accepted.
 - **⏰ OVERDUE** if a commitment to a person is past its date.
 - Be selective: real commitments only, not passing thoughts.
 - **Preserve order** — the user sets priority by reordering items. When editing todos.md, only add/remove/check individual lines. Do NOT rewrite or reorder existing items.
+- **Keep items short** — one line, factual. No action commentary ("Reach out now!", "Confirm status"). You read this file back every cycle — don't write yourself instructions.
 
 ## What to capture
 
