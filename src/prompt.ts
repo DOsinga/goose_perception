@@ -48,14 +48,18 @@ Review and triage todos.md in {{WIKI_DIR}}.
 Today's date is {{TODAY}}.
 
 Read todos.md, then read the recent daily notes and any relevant project pages
-to understand current context. Then:
+to understand current context.
+
+**CRITICAL: Items the user has checked off (- [x]) are DONE. Never un-check,
+re-open, re-add, or move them back to Open. The user's check-offs are final.**
+
+Then:
 
 ## Staleness check
 
 - Any todo with a date more than 7 days old and no recent activity? Mark it ⚠️ STALE.
-- Any todo with a specific date that has passed (e.g. "call james tomorrow (2026-04-20)"
-  and today is 2026-04-22)? Either check it off if evidence suggests it happened,
-  or update the date/context.
+- Any OPEN todo with a specific date that has passed? Flag it ⏰ OVERDUE if it
+  involves another person. Otherwise mark ⚠️ STALE.
 - Any todo older than 30 days with no progress? Move it to an "## Archive" section
   at the bottom — not deleted, just deprioritised.
 
@@ -122,7 +126,7 @@ Maintain **todos.md** — commitments the user made or accepted.
 - \`- [ ] description — who/context (date)\`
 - **Add** when you see "I will…", "I need to…", "TODO", or user agrees to a request. Today's date. Only NEW commitments from current activity — not old documents.
 - **Check off** → \`- [x]\` when you see evidence of completion.
-- **NEVER re-open** a checked-off item. If it's in Done (\`- [x]\`), leave it there. The user manually checks things off — respect that.
+- **NEVER un-check or re-open a \`- [x]\` item.** If something is checked off, the user did that. You do not get to override the user. Even if you see no evidence it was completed — the user decides, not you.
 - **Don't duplicate** — check BOTH Open AND Done sections before adding. If a similar item exists in either, skip it.
 - **🔔** Flag if an old todo is suddenly relevant to what's on screen.
 - **⏰ OVERDUE** if a commitment to a person is past its date.
