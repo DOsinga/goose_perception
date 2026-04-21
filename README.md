@@ -62,6 +62,17 @@ Edit `~/perception/lint.md` to change how pages get reviewed during idle time.
 
 Both are editable in the browser at `/prompt` and `/lint`.
 
+## Agent skill (optional)
+
+The repo includes a `SKILL.md` that lets other agents (Claude Code, Goose, etc.) use your wiki as context. Install it to give your agents knowledge of who you are, what you're working on, and what you've committed to do.
+
+```bash
+mkdir -p ~/.claude/skills/perception-wiki
+ln -sfn "$(pwd)/SKILL.md" ~/.claude/skills/perception-wiki/SKILL.md
+```
+
+Agents that scan `~/.claude/skills/` will pick it up automatically. For CLI use with Claude Code, pass `--add-dir ~/perception/wiki` so the wiki files are accessible.
+
 ## License
 
 Apache-2.0

@@ -69,7 +69,8 @@ async function handleRequest(
       }
       await writeFile(filePath, lines.join("\n"), "utf-8");
     }
-    res.writeHead(302, { Location: path });
+    const redirect = url.searchParams.get("redirect") || path;
+    res.writeHead(302, { Location: redirect });
     res.end();
     return;
   }
@@ -185,8 +186,16 @@ async function handleRequest(
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(renderEditor(path, "", false));
     } else {
+      // Wiki-style: offer to create the page
+      const name = path.slice(1).replace(/\.md$/, "");
       res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(wrap("404", `<h1>Not found</h1><p><code>${path}</code></p><p><a href="/">← Home</a></p>`));
+      res.end(wrap("New page", `
+${breadcrumb(name)}
+<h1>📝 ${esc(name)}</h1>
+<p>This page doesn't exist yet.</p>
+<a href="${path}?edit" class="btn">✏️ Create it</a>
+<a href="/" class="btn" style="margin-left:0.5rem">← Home</a>
+      `));
     }
   }
 }
@@ -426,12 +435,38 @@ function wrap(title: string, body: string): string {
   }
   .nav-search input:focus { outline: 1px solid var(--accent); width: 200px; }
   li.task { list-style: none; margin-left: -1.2rem; }
-  li.task input[type="checkbox"] { margin-right: 0.4rem; accent-color: var(--accent); }
-  li.task.done { opacity: 0.6; text-decoration: line-through; }
+  li.task input[type="checkbox"] { margin-right: 0.4rem; accent-color: var(--accent); cursor: pointer; }
+  li.task.done { opacity: 0.5; text-decoration: line-through; }
+  .dashboard-section { margin-bottom: 1.5rem; }
+  .dashboard-section h2 { margin-bottom: 0.5rem; }
+  .dashboard-section h3 { font-size: 0.9rem; color: var(--dim); margin: 0.8rem 0 0.3rem; }
+  .dashboard-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  @media (max-width: 700px) { .dashboard-columns { grid-template-columns: 1fr; } }
+  .todo-list { margin: 0; padding: 0; }
+  .todo-list li { padding: 0.4rem 0; border-bottom: 1px solid var(--border); display: flex; align-items: flex-start; gap: 0.4rem; font-size: 0.85rem; line-height: 1.4; }
+  .todo-list li:last-child { border-bottom: none; }
+  .todo-text { flex: 1; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; cursor: pointer; }
+  .todo-text.expanded { -webkit-line-clamp: unset; display: block; }
+
+
+  .desc { color: var(--dim); font-size: 0.8rem; }
+  .tag-list { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.3rem 0; }
+  .tag { display: inline-block; padding: 0.2rem 0.6rem; background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; font-size: 0.85rem; text-decoration: none; color: var(--fg); }
+  .tag:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-add { font-size: 0.75rem; color: var(--dim); text-decoration: none; border: 1px solid var(--border); border-radius: 3px; padding: 0.1rem 0.4rem; vertical-align: middle; }
+  .btn-add:hover { color: var(--accent); border-color: var(--accent); }
 </style>
 </head>
 <body>
 ${body}
+<script>
+function newPage(prefix) {
+  const name = prompt('Page name:');
+  if (!name) return;
+  const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  if (slug) window.location.href = '/' + prefix + '/' + slug + '?edit';
+}
+</script>
 </body>
 </html>`;
 }
@@ -724,8 +759,68 @@ ${breadcrumb("settings")}
   return wrap("Settings", body);
 }
 
+/**
+ * Parse todos.md into structured items with line numbers.
+ */
+interface TodoItem {
+  line: number;
+  done: boolean;
+  text: string;
+  section: string;
+}
+
+function parseTodos(content: string): { open: TodoItem[]; done: TodoItem[] } {
+  const lines = content.split("\n");
+  let currentSection = "";
+  const open: TodoItem[] = [];
+  const done: TodoItem[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const headerMatch = line.match(/^##\s+(.+)/);
+    if (headerMatch) {
+      currentSection = headerMatch[1]!.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").trim();
+      continue;
+    }
+    const todoMatch = line.match(/^[-*] \[([ x])\] (.+)$/);
+    if (todoMatch) {
+      const isDone = todoMatch[1] === "x";
+      const item: TodoItem = { line: i, done: isDone, text: todoMatch[2]!, section: currentSection };
+      if (isDone) done.push(item);
+      else open.push(item);
+    }
+  }
+  return { open, done };
+}
+
+function renderTodoItem(item: TodoItem): string {
+  const checked = item.done ? "checked" : "";
+  const cls = item.done ? "task done" : "task";
+  const text = renderInlineMarkdown(item.text);
+  const rawText = item.text.replace(/\*\*(.+?)\*\*/g, "$1").replace(/\*(.+?)\*/g, "$1").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+
+  return `<li class="${cls}">
+    <input type="checkbox" ${checked} onclick="todoAction('/todos', 'toggleLine=${item.line}&redirect=/')" data-line="${item.line}">
+    <span class="todo-text" title="${esc(rawText)}" onclick="this.classList.toggle('expanded')">${text}</span>
+  </li>`;
+}
+
+/**
+ * Render inline markdown (bold, italic, links) without block-level processing.
+ */
+function renderInlineMarkdown(text: string): string {
+  let html = esc(text);
+  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, t, href) => {
+    if (href.startsWith("http")) return `<a href="${href}" target="_blank" class="external">${t} ↗</a>`;
+    const bHref = href.replace(/\.md$/, "").replace(/\.md#/, "#");
+    return `<a href="${bHref}">${t}</a>`;
+  });
+  return html;
+}
+
 async function renderIndex(rootDir: string, wikiDir: string): Promise<string> {
-  const sections = await buildTree(wikiDir, wikiDir);
   const hasPrompt = await fileExists(join(rootDir, "prompt.md"));
   const hasLint = await fileExists(join(rootDir, "lint.md"));
   const configLinks = [
@@ -733,13 +828,104 @@ async function renderIndex(rootDir: string, wikiDir: string): Promise<string> {
     hasLint ? '<a href="/lint">Lint prompt</a>' : null,
     '<a href="/settings">Settings</a>',
   ].filter(Boolean).join(" · ");
+
+  const MAX_TODOS_PER_SECTION = 5;
+
+  // ── Todos (compact: top N per section) ──
+  let todosHtml = "";
+  try {
+    const todosContent = await readFile(join(wikiDir, "todos.md"), "utf-8");
+    const { open, done } = parseTodos(todosContent);
+
+    const sections = new Map<string, TodoItem[]>();
+    for (const item of open) {
+      const key = item.section || "Unsorted";
+      if (!sections.has(key)) sections.set(key, []);
+      sections.get(key)!.push(item);
+    }
+
+    todosHtml = '<div class="dashboard-section"><h2><a href="/todos">📋 TODOs</a> <span class="badge">' + open.length + ' open</span> <a href="/todos?edit" class="btn-add" title="Edit todos">✏️</a></h2>';
+    if (open.length === 0) {
+      todosHtml += '<p style="color: var(--dim)">No open todos!</p>';
+    } else {
+      for (const [section, items] of sections) {
+        const shown = items.slice(0, MAX_TODOS_PER_SECTION);
+        const hidden = items.length - shown.length;
+        todosHtml += `<h3>${esc(section)}</h3><ul class="todo-list">`;
+        for (const item of shown) {
+          todosHtml += renderTodoItem(item);
+        }
+        todosHtml += "</ul>";
+        if (hidden > 0) {
+          todosHtml += `<p style="font-size:0.8rem; color:var(--dim)"><a href="/todos">+${hidden} more</a></p>`;
+        }
+      }
+    }
+    if (done.length > 0) {
+      todosHtml += `<p style="font-size:0.8rem; color:var(--dim)">${done.length} completed — <a href="/todos">view all</a></p>`;
+    }
+    todosHtml += "</div>";
+  } catch {
+    todosHtml = "";
+  }
+
+  // ── Projects (just names) ──
+  let projectsHtml = "";
+  try {
+    const projects = await readdir(join(wikiDir, "projects"), { withFileTypes: true });
+    const mdFiles = projects.filter(e => e.isFile() && e.name.endsWith(".md")).sort((a, b) => a.name.localeCompare(b.name));
+    if (mdFiles.length > 0) {
+      projectsHtml = '<div class="dashboard-section"><h2><a href="/projects">🚀 Projects</a> <a href="#" class="btn-add" title="New project" onclick="newPage(\'projects\')">+</a></h2><p class="tag-list">';
+      projectsHtml += mdFiles.map(f => {
+        const name = f.name.replace(/\.md$/, "");
+        return `<a href="/projects/${name}" class="tag">${name}</a>`;
+      }).join(" ");
+      projectsHtml += "</p></div>";
+    }
+  } catch { /* no projects dir */ }
+
+  // ── People (just names) ──
+  let personsHtml = "";
+  try {
+    const persons = await readdir(join(wikiDir, "persons"), { withFileTypes: true });
+    const mdFiles = persons.filter(e => e.isFile() && e.name.endsWith(".md")).sort((a, b) => a.name.localeCompare(b.name));
+    if (mdFiles.length > 0) {
+      personsHtml = '<div class="dashboard-section"><h2><a href="/persons">👥 People</a> <a href="#" class="btn-add" title="New person" onclick="newPage(\'persons\')">+</a></h2><p class="tag-list">';
+      personsHtml += mdFiles.map(f => {
+        const name = f.name.replace(/\.md$/, "");
+        return `<a href="/persons/${name}" class="tag">${name}</a>`;
+      }).join(" ");
+      personsHtml += "</p></div>";
+    }
+  } catch { /* no persons dir */ }
+
   const body = `
 ${breadcrumb("")}
 <h1>🦆 Perception Wiki</h1>
 <p style="color: var(--dim)">Your second brain, built from desktop screenshots.</p>
+<p style="font-size: 0.85rem">
+  📄 <a href="/owner">Owner</a> · <a href="/log">Log</a> · <a href="/todos">TODOs</a> · <a href="/dates">Daily notes</a>
+  ${configLinks ? `&nbsp;|&nbsp; ⚙️ ${configLinks}` : ""}
+</p>
 <hr>
-${configLinks ? `<p>⚙️ ${configLinks}</p><hr>` : ""}
-${sections}
+<div class="dashboard-columns">
+<div>
+${todosHtml}
+</div>
+<div>
+${projectsHtml}
+${personsHtml}
+</div>
+</div>
+<script>
+function todoAction(path, params) {
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = path + '?' + params;
+  document.body.appendChild(form);
+  form.submit();
+}
+</script>
 `;
   return wrap("Home", body);
 }
@@ -749,7 +935,7 @@ async function renderDirectory(wikiDir: string, dirPath: string): Promise<string
   const sections = await buildTree(dirPath, wikiDir);
   const body = `
 ${breadcrumb(rel)}
-<h1>📁 ${rel}</h1>
+<h1>📁 ${rel} <a href="#" class="btn-add" title="New page" onclick="newPage('${rel}')">+</a></h1>
 ${sections}
 `;
   return wrap(rel, body);

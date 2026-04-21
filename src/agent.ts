@@ -13,7 +13,7 @@ import type {
 import { ndJsonStream } from "@agentclientprotocol/sdk";
 import { GooseClient } from "@aaif/goose-sdk";
 import type { Screenshot } from "./screenshot.js";
-import { loadSystemPrompt, loadLintPrompt, buildPromptBlocks } from "./prompt.js";
+import { loadSystemPrompt, loadLintPrompt, loadTodoReviewPrompt, buildPromptBlocks } from "./prompt.js";
 import { getWikiSummary, getRecentLog } from "./wiki.js";
 
 export interface AgentConfig {
@@ -54,6 +54,7 @@ export interface AgentHandle {
   sendExtractions(extractions: Extraction[], notesContext?: string): Promise<string>;
   sendScreenshots(screenshots: Screenshot[]): Promise<string>;
   sendLint(file: string): Promise<string>;
+  sendTodoReview(): Promise<string>;
   getUsage(): { fast: TokenUsage; smart: TokenUsage; total: TokenUsage };
   listProviders(): Promise<ProviderInfo[]>;
   listModels(provider: string): Promise<{ models: ModelInfo[]; current: string }>;
@@ -262,12 +263,14 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
 
       if (notesContext) {
         body += "\n" + notesContext + "\n";
-        body += "Apple Notes are a primary source of the user's thoughts, plans, and context. " +
-          "Integrate relevant information into the wiki — update person pages, project pages, " +
-          "or create new ones as appropriate. Note titles often hint at the topic.\n\n";
+        body += "These notes are one additional signal alongside the screenshots. " +
+          "Integrate relevant new information into the wiki if it adds context " +
+          "not already captured from screen observations.\n\n";
       }
 
-      body += "Update the wiki based on these observations. Brief summary of what you observed and changed.";
+      body += "Update the wiki based on these observations. Brief summary of what you observed and changed.\n\n";
+      body += "Also: read todos.md. If you see evidence an open todo was completed, check it off. " +
+        "NEVER un-check or re-open done items (- [x]). Don't rewrite or reorder existing items.";
 
       streamBuffer.length = 0;
 
@@ -320,6 +323,23 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
         prompt: [{ type: "text", text: lintPrompt } as ContentBlock],
       });
       trackPromptUsage("smart", lintResp, lintPrompt);
+
+      return streamBuffer.join("");
+    },
+
+    async sendTodoReview(): Promise<string> {
+      const sessionId = await createSession("smart");
+
+      const wikiSummary = await getWikiSummary(config.wikiDir);
+      const todoPrompt = await loadTodoReviewPrompt(config.rootDir, config.wikiDir, wikiSummary);
+
+      streamBuffer.length = 0;
+
+      const todoResp = await client.prompt({
+        sessionId,
+        prompt: [{ type: "text", text: todoPrompt } as ContentBlock],
+      });
+      trackPromptUsage("smart", todoResp, todoPrompt);
 
       return streamBuffer.join("");
     },
