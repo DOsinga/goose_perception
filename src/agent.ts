@@ -13,7 +13,7 @@ import type {
 import { ndJsonStream } from "@agentclientprotocol/sdk";
 import { GooseClient } from "@aaif/goose-sdk";
 import type { Screenshot } from "./screenshot.js";
-import { loadSystemPrompt, loadLintPrompt, loadTodoReviewPrompt, buildPromptBlocks } from "./prompt.js";
+import { loadSystemPrompt, loadLintPrompt, loadTodoReviewPrompt, loadReflectPrompt, buildPromptBlocks } from "./prompt.js";
 import { getWikiSummary, getRecentLog } from "./wiki.js";
 
 export interface AgentConfig {
@@ -51,10 +51,11 @@ export interface TokenUsage {
 
 export interface AgentHandle {
   extractScreenshot(screenshot: Screenshot): Promise<string>;
-  sendExtractions(extractions: Extraction[], notesContext?: string): Promise<string>;
+  sendExtractions(extractions: Extraction[], notesContext?: string, voiceContext?: string): Promise<string>;
   sendScreenshots(screenshots: Screenshot[]): Promise<string>;
   sendLint(file: string): Promise<string>;
   sendTodoReview(): Promise<string>;
+  sendReflection(): Promise<string>;
   getUsage(): { fast: TokenUsage; smart: TokenUsage; total: TokenUsage };
   listProviders(): Promise<ProviderInfo[]>;
   listModels(provider: string): Promise<{ models: ModelInfo[]; current: string }>;
@@ -245,7 +246,7 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
       return result;
     },
 
-    async sendExtractions(extractions: Extraction[], notesContext?: string): Promise<string> {
+    async sendExtractions(extractions: Extraction[], notesContext?: string, voiceContext?: string): Promise<string> {
       const sessionId = await createSession("smart");
 
       const wikiSummary = await getWikiSummary(config.wikiDir);
@@ -266,6 +267,14 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
         body += "These notes are one additional signal alongside the screenshots. " +
           "Integrate relevant new information into the wiki if it adds context " +
           "not already captured from screen observations.\n\n";
+      }
+
+      if (voiceContext) {
+        body += "\n" + voiceContext + "\n";
+        body += "These are transcripts of what the user said aloud (meetings, thinking out loud, voice notes). " +
+          "Capture decisions, commitments (→ todos.md), action items, and context. " +
+          "Attribute statements to the user unless another speaker is identifiable. " +
+          "Voice transcripts are noisy — extract the signal, ignore filler words and transcription errors.\n\n";
       }
 
       body += "Update the wiki based on these observations. Brief summary of what you observed and changed.\n\n";
@@ -340,6 +349,23 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
         prompt: [{ type: "text", text: todoPrompt } as ContentBlock],
       });
       trackPromptUsage("smart", todoResp, todoPrompt);
+
+      return streamBuffer.join("");
+    },
+
+    async sendReflection(): Promise<string> {
+      const sessionId = await createSession("smart");
+
+      const wikiSummary = await getWikiSummary(config.wikiDir);
+      const reflectPrompt = await loadReflectPrompt(config.rootDir, config.wikiDir, wikiSummary);
+
+      streamBuffer.length = 0;
+
+      const reflectResp = await client.prompt({
+        sessionId,
+        prompt: [{ type: "text", text: reflectPrompt } as ContentBlock],
+      });
+      trackPromptUsage("smart", reflectResp, reflectPrompt);
 
       return streamBuffer.join("");
     },

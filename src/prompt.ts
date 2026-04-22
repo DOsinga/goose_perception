@@ -5,6 +5,7 @@ import type { Screenshot } from "./screenshot.js";
 const PROMPT_FILENAME = "prompt.md";
 const LINT_PROMPT_FILENAME = "lint.md";
 const TODO_REVIEW_PROMPT_FILENAME = "todo-review.md";
+const REFLECT_PROMPT_FILENAME = "reflect.md";
 
 const DEFAULT_LINT_PROMPT = `<!-- This is the lint prompt, sent when the daemon has idle time
      and a wiki page hasn't been reviewed in at least 24 hours.
@@ -54,6 +55,93 @@ Read todos.md, then:
 3. **Old done items** — Done items >14 days old? Remove them.
 
 That's it. Don't add flags, don't rewrite text, don't reorder. Update log.md if you change anything.
+`;
+
+const DEFAULT_REFLECT_PROMPT = `<!-- Daily reflection prompt, runs once a day (or after heavy meeting/voice activity).
+     {{WIKI_DIR}}, {{WIKI_SUMMARY}}, {{TODAY}}, {{TODAYS_PAGE}} are replaced automatically. -->
+
+This is a daily reflection pass. Today is {{TODAY}}.
+
+## Setup
+
+Read these files thoroughly before making any changes:
+
+1. {{TODAYS_PAGE}} — today's date page
+2. todos.md — current commitments
+3. owner.md — user profile
+
+Then read any person or project pages referenced in today's date page.
+
+Take your time. This is a reflection, not a speed run.
+
+## Wiki: {{WIKI_DIR}}
+
+{{WIKI_SUMMARY}}
+
+## Reflection tasks
+
+### a) Implicit commitments & follow-ups
+
+Look for things that aren't phrased as "I will..." but imply action:
+- Someone asked a question and the user didn't say no
+- A discussion about "we should..." with no pushback
+- Meeting notes that mention next steps assigned to or accepted by the user
+- Voice transcripts are especially rich here — "yeah I can look at that", "let me check", "I'll circle back"
+
+Be selective — only add todos that are genuinely implied, not speculative.
+Add them to todos.md with the annotation \`(inferred from reflection)\` and today's date.
+Don't duplicate anything already in todos.md (check both Open and Done sections).
+
+### b) Decisions made
+
+Scan for decisions that were made (explicitly or by consensus) but not yet captured
+as facts on project or person pages. Examples:
+- "We're going with Postgres" → update the project page's stack/status
+- "Jane will own the migration" → update Jane's person page and the project page
+- A meeting where an approach was chosen but only logged as a time-block bullet
+
+Update the relevant wiki pages with the decision as a fact, not as a log entry.
+
+### c) Open threads
+
+Identify conversations or topics that were started but not resolved:
+- Someone asked something and there's no answer captured
+- A discussion was cut short or deferred ("let's talk about this later")
+- A question the user asked that hasn't been answered yet
+
+Add these as a \`## Open threads\` section in today's date page ({{TODAYS_PAGE}}).
+Keep each item to one or two lines — what was asked, by whom, and what's unresolved.
+
+### d) People context
+
+Did the user interact with someone new or learn something significant about an
+existing person? Update person pages with relationship context:
+- Role, expertise, what they're working on, how they relate to the user
+- Not just "seen at 14:00" — meaningful context that's useful tomorrow
+
+### e) Owner insights
+
+Any new patterns about the user — what they care about, how they work, recurring
+themes in their day. Update owner.md sparingly: only genuine insights, not noise.
+If nothing stands out, skip this step entirely.
+
+### f) Tomorrow prep
+
+Based on today's activity, are there things the user should be aware of tomorrow?
+- Deadlines approaching
+- Follow-ups that are due
+- Context they'll need for scheduled meetings
+- Threads that need resolution
+
+Add a \`## Tomorrow\` section to today's date page ({{TODAYS_PAGE}}).
+
+## Important guidelines
+
+- **Read thoroughly before writing** — understand the full day before changing anything.
+- **Don't duplicate** anything already captured by the real-time observation loop.
+- **Be selective** — fewer high-quality additions beat many speculative ones.
+- **Voice transcripts** are the richest source for implicit commitments. Pay close attention.
+- Append to log.md with a summary of what this reflection pass changed.
 `;
 
 const DEFAULT_PROMPT = `<!-- System prompt for the perception daemon. HTML comments are stripped.
@@ -107,6 +195,21 @@ Maintain **todos.md** — commitments the user made or accepted.
 
 - Tools, conversations, people, URLs, project context, decisions, commitments.
 
+## Voice Transcripts
+
+You may receive transcripts of what the user said aloud (meetings, thinking
+out loud, voice notes). These are especially valuable for:
+
+- **Action items & commitments** — "I'll send that by Friday" → add to todos.md
+- **Decisions** — "Let's go with approach B" → note in the relevant project page
+- **People context** — who was in the meeting, what they said
+- **Project updates** — status discussed verbally that may not appear on screen
+
+Voice transcripts are noisy — expect filler words, false starts, and
+transcription errors. Extract the signal, ignore the noise.
+When voice and screenshots overlap in time, they're complementary:
+the screenshot shows what's on screen, the voice shows what's being discussed.
+
 ## What to skip
 
 - Window chrome, system UI, repeated identical screenshots ("no changes").
@@ -125,7 +228,7 @@ context would help — not speculatively.
 export async function ensurePromptFiles(rootDir: string): Promise<boolean> {
   await mkdir(rootDir, { recursive: true });
   let created = false;
-  for (const [filename, content] of [[PROMPT_FILENAME, DEFAULT_PROMPT], [LINT_PROMPT_FILENAME, DEFAULT_LINT_PROMPT], [TODO_REVIEW_PROMPT_FILENAME, DEFAULT_TODO_REVIEW_PROMPT]]) {
+  for (const [filename, content] of [[PROMPT_FILENAME, DEFAULT_PROMPT], [LINT_PROMPT_FILENAME, DEFAULT_LINT_PROMPT], [TODO_REVIEW_PROMPT_FILENAME, DEFAULT_TODO_REVIEW_PROMPT], [REFLECT_PROMPT_FILENAME, DEFAULT_REFLECT_PROMPT]]) {
     const path = join(rootDir, filename);
     try {
       await access(path);
@@ -194,6 +297,31 @@ export async function loadTodoReviewPrompt(
   raw = raw.replace(/\{\{WIKI_DIR\}\}/g, wikiDir);
   raw = raw.replace(/\{\{WIKI_SUMMARY\}\}/g, wikiSummary);
   raw = raw.replace(/\{\{TODAY\}\}/g, new Date().toISOString().slice(0, 10));
+  raw = raw.replace(/\n{3,}/g, "\n\n");
+
+  return raw.trim();
+}
+
+/**
+ * Load and prepare the daily reflection prompt, substituting placeholders.
+ */
+export async function loadReflectPrompt(
+  rootDir: string,
+  wikiDir: string,
+  wikiSummary: string,
+): Promise<string> {
+  const path = join(rootDir, REFLECT_PROMPT_FILENAME);
+  let raw = await readFile(path, "utf-8");
+
+  const today = new Date().toISOString().slice(0, 10);
+  const [year, month, day] = today.split("-");
+  const todaysPage = `dates/${year}/${month}/${day}.md`;
+
+  raw = raw.replace(/<!--[\s\S]*?-->/g, "");
+  raw = raw.replace(/\{\{WIKI_DIR\}\}/g, wikiDir);
+  raw = raw.replace(/\{\{WIKI_SUMMARY\}\}/g, wikiSummary);
+  raw = raw.replace(/\{\{TODAY\}\}/g, today);
+  raw = raw.replace(/\{\{TODAYS_PAGE\}\}/g, todaysPage);
   raw = raw.replace(/\n{3,}/g, "\n\n");
 
   return raw.trim();

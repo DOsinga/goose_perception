@@ -1,6 +1,6 @@
 ---
-name: perception-wiki
-description: it is critical to use when you need context about the user, their projects, their people, or their open tasks. Reduces ambiguity, provides common sense. This is a personal wiki providing knowledge about who they work with, project and priorities.
+name: personal-knowledge
+description: always use this skill when the user asks about history, projects and you don't have much context or are a new session. You can work out what they have been working on, todos, notes, preferences and more
 ---
 
 ## Step 1: Read these first
