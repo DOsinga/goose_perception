@@ -3,12 +3,18 @@ import { join, dirname } from "node:path";
 
 const SETTINGS_FILENAME = "settings.json";
 
+export type VoiceBackend = "whisper-api" | "whisper-local" | "macos";
+
 export interface Settings {
   fastProvider: string;
   fastModel: string;
   smartProvider: string;
   smartModel: string;
   screenshotIntervalSecs: number;
+  voiceEnabled: boolean;
+  voiceBackend: VoiceBackend;
+  voiceChunkSecs: number;
+  voiceSilenceThresholdDb: number;
 }
 
 const DEFAULTS: Settings = {
@@ -17,6 +23,10 @@ const DEFAULTS: Settings = {
   smartProvider: "",
   smartModel: "",
   screenshotIntervalSecs: 5,
+  voiceEnabled: false,
+  voiceBackend: "whisper-api",
+  voiceChunkSecs: 30,
+  voiceSilenceThresholdDb: -35,
 };
 
 export async function loadSettings(rootDir: string): Promise<Settings> {

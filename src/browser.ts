@@ -47,6 +47,10 @@ async function handleRequest(
       smartProvider: params.get("smartProvider") ?? "",
       smartModel: params.get("smartModel") ?? "",
       screenshotIntervalSecs: parseInt(params.get("screenshotIntervalSecs") ?? "5", 10) || 5,
+      voiceEnabled: params.get("voiceEnabled") === "true",
+      voiceBackend: (params.get("voiceBackend") ?? "whisper-api") as Settings["voiceBackend"],
+      voiceChunkSecs: parseInt(params.get("voiceChunkSecs") ?? "30", 10) || 30,
+      voiceSilenceThresholdDb: parseInt(params.get("voiceSilenceThresholdDb") ?? "-35", 10) || -35,
     };
     await saveSettings(rootDir, settings);
     res.writeHead(302, { Location: "/settings" });
@@ -665,6 +669,36 @@ ${breadcrumb("settings")}
       <label for="screenshotIntervalSecs">Screenshot interval (seconds)</label>
       <input type="number" id="screenshotIntervalSecs" name="screenshotIntervalSecs"
         value="${esc(String(settings.screenshotIntervalSecs))}" min="1">
+    </div>
+  </fieldset>
+  <fieldset>
+    <legend>🎙️ Voice capture</legend>
+    <p style="color: var(--dim); font-size: 0.85rem">Capture ambient audio from your microphone and transcribe it. Off by default. Audio chunks are deleted after transcription — only text is kept.</p>
+    <div class="field">
+      <label for="voiceEnabled">Enable voice capture</label>
+      <select id="voiceEnabled" name="voiceEnabled">
+        <option value="false"${!settings.voiceEnabled ? " selected" : ""}>Off</option>
+        <option value="true"${settings.voiceEnabled ? " selected" : ""}>On</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="voiceBackend">Transcription backend</label>
+      <select id="voiceBackend" name="voiceBackend">
+        <option value="whisper-api"${settings.voiceBackend === "whisper-api" ? " selected" : ""}>OpenAI Whisper API (~$0.006/min)</option>
+        <option value="whisper-local"${settings.voiceBackend === "whisper-local" ? " selected" : ""}>Local whisper.cpp (free, needs install)</option>
+        <option value="macos"${settings.voiceBackend === "macos" ? " selected" : ""}>macOS built-in (free, less accurate)</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="voiceChunkSecs">Chunk duration (seconds)</label>
+      <input type="number" id="voiceChunkSecs" name="voiceChunkSecs"
+        value="${esc(String(settings.voiceChunkSecs))}" min="10" max="120">
+    </div>
+    <div class="field">
+      <label for="voiceSilenceThresholdDb">Silence threshold (dB)</label>
+      <input type="number" id="voiceSilenceThresholdDb" name="voiceSilenceThresholdDb"
+        value="${esc(String(settings.voiceSilenceThresholdDb))}" min="-60" max="0">
+      <p style="color: var(--dim); font-size: 0.8rem; margin-top: 0.2rem">Audio below this level is treated as silence and skipped. Default: -35 dB.</p>
     </div>
   </fieldset>
   <div style="margin-top: 1rem">

@@ -10,8 +10,10 @@ import { connectAgent, type AgentHandle, type Extraction } from "./agent.js";
 import { startBrowser, setBrowserAgent } from "./browser.js";
 import { ensurePromptFiles } from "./prompt.js";
 import { seedLintQueue, recordChangedFiles, pickLintTarget, markLinted } from "./lint.js";
-import { loadSettings } from "./settings.js";
+import { loadSettings, type VoiceBackend } from "./settings.js";
 import { getChangedNotes, formatNotesForAgent } from "./notes.js";
+import { recordChunk, hasVoiceActivity, checkMicAvailable } from "./mic.js";
+import { transcribe, checkBackendAvailable, type TranscribeBackend } from "./transcribe.js";
 
 const DEFAULT_INTERVAL_SECS = 5;
 const DEFAULT_BATCH_SIZE = 3;
@@ -26,6 +28,10 @@ interface Config {
   inboxDir: string;
   processedDir: string;
   serverUrl?: string;
+  voiceEnabled: boolean;
+  voiceBackend: VoiceBackend;
+  voiceChunkSecs: number;
+  voiceSilenceThresholdDb: number;
 }
 
 function parseConfig(): Config {
@@ -65,6 +71,10 @@ Options:
     inboxDir: join(rootDir, "inbox"),
     processedDir: join(rootDir, "processed"),
     serverUrl: values.server,
+    voiceEnabled: false,
+    voiceBackend: "whisper-api" as VoiceBackend,
+    voiceChunkSecs: 30,
+    voiceSilenceThresholdDb: -35,
   };
 }
 
@@ -148,6 +158,126 @@ async function screenshotLoop(config: Config, signal: AbortSignal): Promise<void
   // Cleanup
   if (baseBmpPath) await unlink(baseBmpPath).catch(() => {});
   if (previousPng) await unlink(previousPng).catch(() => {});
+}
+
+// ── Voice capture loop ──────────────────────────────────────────────
+
+let voiceDisabled = false;
+
+async function micLoop(config: Config, signal: AbortSignal): Promise<void> {
+  if (!config.voiceEnabled || voiceDisabled) return;
+
+  const chunksDir = join(config.rootDir, "audio", "chunks");
+  await mkdir(chunksDir, { recursive: true });
+
+  // Verify mic access before entering the loop
+  const micOk = await checkMicAvailable().catch(() => false);
+  if (!micOk) {
+    console.log("🎙️  Microphone unavailable — voice capture disabled for this session");
+    voiceDisabled = true;
+    return;
+  }
+  console.log(`🎙️  Voice capture active (${config.voiceChunkSecs}s chunks, ${config.voiceBackend})`);
+
+  while (!signal.aborted) {
+    const filename = `chunk-${Date.now()}.wav`;
+    const chunkPath = join(chunksDir, filename);
+
+    try {
+      await recordChunk(chunkPath, config.voiceChunkSecs);
+
+      const hasVoice = await hasVoiceActivity(chunkPath, config.voiceSilenceThresholdDb);
+      if (!hasVoice) {
+        await unlink(chunkPath).catch(() => {});
+        continue;
+      }
+
+      console.log(`🎙️  Voice detected — saved ${filename}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/Microphone permission denied/i.test(msg)) {
+        console.log("🎙️  Microphone permission denied — voice capture disabled");
+        voiceDisabled = true;
+        return;
+      }
+      console.error(`🎙️  Mic capture failed:`, msg);
+      await sleep(5000);
+    }
+  }
+}
+
+// ── Transcription loop ──────────────────────────────────────────────
+
+async function transcribeLoop(config: Config, signal: AbortSignal): Promise<void> {
+  if (!config.voiceEnabled || voiceDisabled) return;
+
+  const chunksDir = join(config.rootDir, "audio", "chunks");
+  const processedAudioDir = join(config.rootDir, "audio", "processed");
+  await mkdir(chunksDir, { recursive: true });
+  await mkdir(processedAudioDir, { recursive: true });
+
+  // Verify backend availability
+  const backendOk = await checkBackendAvailable(config.voiceBackend).catch(() => false);
+  if (!backendOk) {
+    console.log(`🎙️  Transcription backend "${config.voiceBackend}" not available — voice disabled`);
+    voiceDisabled = true;
+    return;
+  }
+
+  let consecutiveErrors = 0;
+
+  while (!signal.aborted) {
+    try {
+      const files = await readdir(chunksDir).catch(() => [] as string[]);
+      const wavs = files.filter((f) => f.endsWith(".wav") && !f.includes(".recording.")).sort();
+
+      if (wavs.length === 0) {
+        await sleep(3000);
+        continue;
+      }
+
+      for (const wav of wavs) {
+        if (signal.aborted) break;
+        const wavPath = join(chunksDir, wav);
+
+        try {
+          console.log(`🎙️  Transcribing: ${wav}`);
+          const text = await transcribe(wavPath, config.voiceBackend);
+
+          if (text && text.length > 10) {
+            // Write transcript to inbox for wiki loop to pick up
+            const tsMatch = wav.match(/chunk-(\d+)\./);
+            const timestamp = tsMatch ? tsMatch[1] : String(Date.now());
+            const txtPath = join(config.inboxDir, `voice-${timestamp}.txt`);
+            await writeFile(txtPath, text, "utf-8");
+            console.log(`✅ Transcribed (${text.length} chars): ${text.substring(0, 80)}${text.length > 80 ? "…" : ""}`);
+          } else {
+            console.log(`⏭️  Transcription too short, skipping`);
+          }
+
+          // Delete audio after transcription (privacy)
+          await unlink(wavPath).catch(() => {});
+          consecutiveErrors = 0;
+        } catch (err) {
+          consecutiveErrors++;
+          console.error(`❌ Transcription failed:`, err instanceof Error ? err.message : err);
+
+          // Move failed audio to processed to avoid retry loop
+          await rename(wavPath, join(processedAudioDir, wav)).catch(() =>
+            unlink(wavPath).catch(() => {}),
+          );
+
+          if (consecutiveErrors > 5) {
+            console.error("⏳ Too many transcription errors, backing off 30s…");
+            await sleep(30_000);
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`❌ Transcribe loop error:`, err instanceof Error ? err.message : err);
+      await sleep(5000);
+    }
+  }
 }
 
 /**
@@ -349,11 +479,17 @@ async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal)
   const IDLE_WAIT_MS = 30_000;        // check for notes/lint every 30s when idle
   const BATCH_COLLECT_MS = 30_000;    // wait 30s to collect extractions into a batch
   const TODO_REVIEW_INTERVAL_MS = 1 * 60 * 60 * 1000; // review todos every hour
+  const VOICE_BURST_THRESHOLD = 3;    // voice transcripts in a window to trigger reflection
+  const VOICE_BURST_WINDOW_MS = 60 * 60 * 1000; // 1 hour window for voice burst detection
+  const REFLECT_COOLDOWN_MS = 4 * 60 * 60 * 1000; // min 4 hours between reflections
 
   let consecutiveErrors = 0;
   let lastBatchText = "";
   let consecutiveSkips = 0;
   let lastTodoReview = 0;
+  let lastReflection = 0;
+  let lastReflectionDate = "";        // YYYY-MM-DD — ensures at most one daily reflection
+  let voiceTimestamps: number[] = [];  // timestamps of recent voice transcripts processed
   let cooldownMs = MIN_COOLDOWN_MS;
   let lastUpdateTime = 0;
 
@@ -363,8 +499,11 @@ async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal)
       const txts = files
         .filter((f) => f.startsWith("screenshot-") && f.endsWith(".txt"))
         .sort();
+      const voiceTxts = files
+        .filter((f) => f.startsWith("voice-") && f.endsWith(".txt"))
+        .sort();
 
-      if (txts.length === 0) {
+      if (txts.length === 0 && voiceTxts.length === 0) {
         // No extractions pending — check Apple Notes for changes
         try {
           const changedNotes = await getChangedNotes(config.rootDir);
@@ -386,34 +525,71 @@ async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal)
           console.error(`📝 Notes check failed:`, err instanceof Error ? err.message : err);
         }
 
-        // No notes changes either — try todo review or linting
-        const timeSinceTodoReview = Date.now() - lastTodoReview;
-        if (timeSinceTodoReview >= TODO_REVIEW_INTERVAL_MS) {
-          console.log(`\n${"─".repeat(60)}`);
-          console.log(`📋 Todo review (every ${TODO_REVIEW_INTERVAL_MS / 3600000}h)`);
-          console.log(`${"─".repeat(60)}`);
+        // No notes changes either — check if reflection, todo review, or lint is due
+
+        // ── Daily reflection ──
+        // Triggers: (1) once per calendar day during idle, OR
+        //           (2) after a burst of voice transcripts (meeting just ended)
+        const today = new Date().toISOString().slice(0, 10);
+        const timeSinceReflection = Date.now() - lastReflection;
+        const reflectionCooledDown = timeSinceReflection >= REFLECT_COOLDOWN_MS;
+
+        // Prune old voice timestamps outside the burst window
+        const burstCutoff = Date.now() - VOICE_BURST_WINDOW_MS;
+        voiceTimestamps = voiceTimestamps.filter((t) => t > burstCutoff);
+        const voiceBurst = voiceTimestamps.length >= VOICE_BURST_THRESHOLD;
+
+        const dailyReflectionDue = lastReflectionDate !== today && reflectionCooledDown;
+        const meetingReflectionDue = voiceBurst && reflectionCooledDown;
+
+        if (dailyReflectionDue || meetingReflectionDue) {
+          const reason = meetingReflectionDue
+            ? `meeting burst (${voiceTimestamps.length} voice transcripts in last hour)`
+            : "daily reflection";
+          console.log(`\n${"═".repeat(60)}`);
+          console.log(`🪞 Reflection: ${reason}`);
+          console.log(`${"═".repeat(60)}`);
 
           const startTime = Date.now();
-          await agent.sendTodoReview();
+          await agent.sendReflection();
           await recordChangedFiles(config.rootDir, config.wikiDir, startTime);
-          console.log(`\n✅ Todo review complete`);
+          console.log(`\n✅ Reflection complete`);
           logUsage(agent, config.rootDir);
-          lastTodoReview = Date.now();
+          lastReflection = Date.now();
+          lastReflectionDate = today;
+          voiceTimestamps = []; // reset burst counter after reflecting
           lastUpdateTime = Date.now();
         } else {
-          const lintTarget = await pickLintTarget(config.rootDir);
-          if (lintTarget) {
+          // ── Todo review (hourly) ──
+          const timeSinceTodoReview = Date.now() - lastTodoReview;
+          if (timeSinceTodoReview >= TODO_REVIEW_INTERVAL_MS) {
             console.log(`\n${"─".repeat(60)}`);
-            console.log(`🧹 Linting: ${lintTarget}`);
+            console.log(`📋 Todo review (every ${TODO_REVIEW_INTERVAL_MS / 3600000}h)`);
             console.log(`${"─".repeat(60)}`);
 
             const startTime = Date.now();
-            await agent.sendLint(lintTarget);
-            await markLinted(config.rootDir, lintTarget);
+            await agent.sendTodoReview();
             await recordChangedFiles(config.rootDir, config.wikiDir, startTime);
-            console.log(`\n✅ Lint complete: ${lintTarget}`);
+            console.log(`\n✅ Todo review complete`);
             logUsage(agent, config.rootDir);
+            lastTodoReview = Date.now();
             lastUpdateTime = Date.now();
+          } else {
+            // ── Lint (idle fill) ──
+            const lintTarget = await pickLintTarget(config.rootDir);
+            if (lintTarget) {
+              console.log(`\n${"─".repeat(60)}`);
+              console.log(`🧹 Linting: ${lintTarget}`);
+              console.log(`${"─".repeat(60)}`);
+
+              const startTime = Date.now();
+              await agent.sendLint(lintTarget);
+              await markLinted(config.rootDir, lintTarget);
+              await recordChangedFiles(config.rootDir, config.wikiDir, startTime);
+              console.log(`\n✅ Lint complete: ${lintTarget}`);
+              logUsage(agent, config.rootDir);
+              lastUpdateTime = Date.now();
+            }
           }
         }
 
@@ -436,6 +612,9 @@ async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal)
       const allTxts = updatedFiles
         .filter((f) => f.startsWith("screenshot-") && f.endsWith(".txt"))
         .sort();
+      const allVoiceTxts = updatedFiles
+        .filter((f) => f.startsWith("voice-") && f.endsWith(".txt"))
+        .sort();
 
       // Build extraction batch from everything in inbox
       const extractions: Extraction[] = [];
@@ -455,12 +634,31 @@ async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal)
         toCleanup.push(pngPath);
       }
 
-      if (extractions.length === 0) continue;
+      // Build voice context from voice transcripts
+      let voiceContext = "";
+      if (allVoiceTxts.length > 0) {
+        voiceContext = `${allVoiceTxts.length} voice transcript(s):\n\n`;
+        for (const txtFile of allVoiceTxts) {
+          const txtPath = join(config.inboxDir, txtFile);
+          const text = await readFile(txtPath, "utf-8");
+          const tsMatch = txtFile.match(/voice-(\d+)\./);
+          const timestamp = tsMatch ? new Date(parseInt(tsMatch[1]!, 10)) : new Date();
+          voiceContext += `--- [${timestamp.toLocaleTimeString()} — spoken] ---\n${text}\n\n`;
+          toCleanup.push(txtPath);
+        }
+        console.log(`🎙️  ${allVoiceTxts.length} voice transcript(s) ready`);
+        // Track for meeting-burst reflection trigger
+        for (let i = 0; i < allVoiceTxts.length; i++) {
+          voiceTimestamps.push(Date.now());
+        }
+      }
+
+      if (extractions.length === 0 && !voiceContext) continue;
 
       // Check similarity — use the LAST extraction (most recent screen state)
       const batchText = extractions.map(e => e.text).join("\n");
-      const latestText = extractions[extractions.length - 1]!.text;
-      const similarity = lastBatchText ? textSimilarity(latestText, lastBatchText) : 0;
+      const latestText = extractions.length > 0 ? extractions[extractions.length - 1]!.text : "";
+      const similarity = lastBatchText && latestText ? textSimilarity(latestText, lastBatchText) : 0;
 
       // Check Apple Notes for changes
       let notesContext = "";
@@ -474,9 +672,10 @@ async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal)
         console.error(`📝 Notes check failed:`, err instanceof Error ? err.message : err);
       }
 
-      // Decide: skip or send?
+      // Decide: skip or send? (voice transcripts always force a send)
       const isBurst = consecutiveSkips >= 2 && similarity < 0.4;
-      const shouldSkip = similarity >= SIMILARITY_THRESHOLD && !notesContext && !isBurst;
+      const hasVoice = voiceContext.length > 0;
+      const shouldSkip = similarity >= SIMILARITY_THRESHOLD && !notesContext && !hasVoice && !isBurst;
 
       if (shouldSkip) {
         consecutiveSkips++;
@@ -504,12 +703,17 @@ async function wikiLoop(config: Config, agent: AgentHandle, signal: AbortSignal)
       consecutiveSkips = 0;
 
       console.log(`\n${"═".repeat(60)}`);
-      console.log(`🧠 Wiki update: ${extractions.length} extraction(s)${notesContext ? " + notes" : ""} (${(similarity * 100).toFixed(0)}% similar${isBurst ? ", burst" : ""})`);
+      const parts = [
+        extractions.length > 0 ? `${extractions.length} extraction(s)` : null,
+        hasVoice ? "voice" : null,
+        notesContext ? "notes" : null,
+      ].filter(Boolean).join(" + ");
+      console.log(`🧠 Wiki update: ${parts} (${(similarity * 100).toFixed(0)}% similar${isBurst ? ", burst" : ""})`);
       console.log(`${"═".repeat(60)}`);
 
       const startTime = Date.now();
-      await agent.sendExtractions(extractions, notesContext || undefined);
-      lastBatchText = latestText;
+      await agent.sendExtractions(extractions, notesContext || undefined, voiceContext || undefined);
+      if (latestText) lastBatchText = latestText;
       lastUpdateTime = Date.now();
 
       // Track wiki changes for lint queue
@@ -549,6 +753,12 @@ async function main() {
     config.intervalSecs = settings.screenshotIntervalSecs;
   }
 
+  // Voice settings from settings.json
+  config.voiceEnabled = settings.voiceEnabled;
+  config.voiceBackend = settings.voiceBackend;
+  config.voiceChunkSecs = settings.voiceChunkSecs;
+  config.voiceSilenceThresholdDb = settings.voiceSilenceThresholdDb;
+
   await ensurePromptFiles(config.rootDir);
   await seedLintQueue(config.rootDir, config.wikiDir);
   const flushed = await flushInbox(config.inboxDir, config.processedDir);
@@ -584,6 +794,10 @@ async function main() {
         if (updated.screenshotIntervalSecs > 0) {
           config.intervalSecs = updated.screenshotIntervalSecs;
         }
+        config.voiceEnabled = updated.voiceEnabled;
+        config.voiceBackend = updated.voiceBackend;
+        config.voiceChunkSecs = updated.voiceChunkSecs;
+        config.voiceSilenceThresholdDb = updated.voiceSilenceThresholdDb;
         console.log(`✅ Settings saved — using ${updated.smartProvider}/${updated.smartModel}\n`);
         break;
       }
@@ -598,7 +812,8 @@ async function main() {
   const smart = settings.smartProvider && settings.smartModel
     ? `${settings.smartProvider}/${settings.smartModel}`
     : "default";
-  console.log(`⚡ Fast: ${fast}  |  🧠 Smart: ${smart}  |  📷 Every ${config.intervalSecs}s`);
+  const voiceStatus = config.voiceEnabled ? `🎙️ Voice: ${config.voiceBackend}` : "🎙️ Voice: off";
+  console.log(`⚡ Fast: ${fast}  |  🧠 Smart: ${smart}  |  📷 Every ${config.intervalSecs}s  |  ${voiceStatus}`);
 
   const abortController = new AbortController();
   const { signal } = abortController;
@@ -619,8 +834,10 @@ async function main() {
 
   await Promise.all([
     extractLoop(config, agent, signal),
+    transcribeLoop(config, signal),
     wikiLoop(config, agent, signal),
     sleep(2000).then(() => screenshotLoop(config, signal)),
+    sleep(2000).then(() => micLoop(config, signal)),
   ]);
 }
 

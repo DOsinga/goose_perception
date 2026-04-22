@@ -18,6 +18,7 @@ That's it. Opens a wiki browser at http://localhost:8112 and starts capturing.
 - **Goose** — either on PATH (`brew install goose`) or auto-installed via the npm package
 - **macOS** or **Linux** (screenshot tools: `screencapture` on macOS, `gnome-screenshot`/`scrot` on Linux)
 - A vision-capable model configured in goose (e.g. Claude, GPT-4o, Gemini)
+- **ffmpeg** (optional, for voice capture) — `brew install ffmpeg`
 
 ## Options
 
@@ -35,6 +36,7 @@ That's it. Opens a wiki browser at http://localhost:8112 and starts capturing.
 ├── prompt.md        System prompt — edit to change agent behavior
 ├── lint.md          Lint prompt — edit to change how pages get reviewed
 ├── tolint.json      Lint queue state
+├── settings.json    Model, capture, and voice settings
 ├── wiki/            The wiki itself
 │   ├── index.md     Agent-maintained catalog of all pages
 │   ├── log.md       Append-only record of wiki changes
@@ -42,17 +44,22 @@ That's it. Opens a wiki browser at http://localhost:8112 and starts capturing.
 │   ├── dates/       Daily notes (dates/2025/07/13.md)
 │   ├── persons/     People (persons/jane-doe.md)
 │   └── projects/    Projects (projects/goose.md)
-├── inbox/           Screenshots waiting to be processed
-└── processed/       Screenshots already sent to the agent
+├── inbox/           Screenshots & voice transcripts waiting to be processed
+├── processed/       Files already sent to the agent
+└── audio/           Temporary voice capture (deleted after transcription)
+    ├── chunks/      WAV files from mic (auto-deleted)
+    └── processed/   Failed transcriptions (for debugging)
 ```
 
 ## How it works
 
 1. **Screenshot loop** captures your desktop every N seconds
-2. **Agent loop** batches screenshots (samples first/middle/last to cap at 3), feeds them to Goose with the wiki context
-3. The agent reads existing wiki pages, updates or creates new ones, maintains cross-references
-4. When a batch produces no wiki changes, the agent **lints** the oldest unreviewed page — summarizing, cross-referencing, cleaning up
-5. A built-in web server lets you browse, search, and edit the wiki at http://localhost:8112
+2. **Extract loop** sends each screenshot to a fast model for text extraction
+3. **Mic loop** (optional) records audio in 30-second chunks, skips silence via VAD
+4. **Transcribe loop** sends voice chunks to Whisper (API, local, or macOS built-in) for transcription
+5. **Wiki loop** batches screenshot extractions + voice transcripts + Apple Notes changes, sends them to a smart model that updates the wiki
+6. When idle, the agent **lints** the oldest unreviewed page — summarizing, cross-referencing, cleaning up
+7. A built-in web server lets you browse, search, and edit the wiki at http://localhost:8112
 
 ## Customization
 
@@ -61,6 +68,22 @@ Edit `~/perception/prompt.md` to change what the agent captures and how it organ
 Edit `~/perception/lint.md` to change how pages get reviewed during idle time.
 
 Both are editable in the browser at `/prompt` and `/lint`.
+
+## Voice capture
+
+Voice capture is **off by default**. Enable it in the settings page at http://localhost:8112/settings.
+
+Three transcription backends are supported:
+
+| Backend | Cost | Privacy | Setup |
+|---------|------|---------|-------|
+| **OpenAI Whisper API** | ~$0.006/min | Audio sent to OpenAI | Set `OPENAI_API_KEY` env var |
+| **Local whisper.cpp** | Free | Fully local | `brew install whisper-cpp` |
+| **macOS built-in** | Free | Fully local | Nothing (compiles a Swift helper on first use) |
+
+Audio chunks are recorded as mono 16kHz WAV files, checked for voice activity (silence is skipped), transcribed, and then **immediately deleted**. Only the text transcript is kept.
+
+Requires **ffmpeg** for mic capture: `brew install ffmpeg`
 
 ## Agent skill (optional)
 
