@@ -108,9 +108,12 @@ export async function connectAgent(config: AgentConfig): Promise<AgentHandle> {
       sessionUpdate: async (params: SessionNotification) => {
         const update = params.update;
         if (update.sessionUpdate === "agent_message_chunk") {
-          if (update.content.type === "text") {
-            streamBuffer.push(update.content.text);
-            process.stdout.write(update.content.text);
+          const content = update.content;
+          if (content.type === "text") {
+            streamBuffer.push(content.text);
+            process.stdout.write(content.text);
+          } else if ((content as any).type === "thinking") {
+            process.stdout.write(`💭 ${(content as any).text ?? ""}`);
           }
         } else if (update.sessionUpdate === "tool_call") {
           const title = update.title ?? "tool";

@@ -1,15 +1,98 @@
-import { execFile } from "node:child_process";
-import { readFile, mkdir, readdir, unlink, rename } from "node:fs/promises";
+import { execFile, execFileSync } from "node:child_process";
+import { readFile, mkdir, readdir, unlink, rename, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const COMPARE_WIDTH = 1024;
 const DIFF_THRESHOLD = 0.02; // 2% of bytes must differ to count as a change
+
+export interface WindowInfo {
+  windowId: number;
+  app: string;
+  title: string;
+  url: string;
+}
 
 export interface Screenshot {
   path: string;
   timestamp: Date;
   base64: string;
   mimeType: string;
+  windowInfo?: WindowInfo;
+}
+
+// ── Window info ──
+
+const FRONTWINDOW_SWIFT = `
+import CoreGraphics
+let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] {
+    for w in list {
+        if (w["kCGWindowLayer"] as? Int ?? 999) == 0 {
+            let id = w["kCGWindowNumber"] as? Int ?? 0
+            let app = w["kCGWindowOwnerName"] as? String ?? ""
+            let title = w["kCGWindowName"] as? String ?? ""
+            print("\\(id)|\\(app)|\\(title)")
+            break
+        }
+    }
+}
+`;
+
+let frontwindowBin: string | null = null;
+
+function ensureFrontwindowBin(): string {
+  if (frontwindowBin && existsSync(frontwindowBin)) return frontwindowBin;
+  const binPath = join(tmpdir(), "goose-perception-frontwindow");
+  const srcPath = binPath + ".swift";
+  try {
+    execFileSync("sh", ["-c", `cat > '${srcPath}' << 'SWIFT'\n${FRONTWINDOW_SWIFT}\nSWIFT`]);
+    execFileSync("swiftc", ["-O", srcPath, "-o", binPath], { timeout: 30000 });
+    frontwindowBin = binPath;
+  } catch {
+    frontwindowBin = null;
+  }
+  return frontwindowBin ?? "";
+}
+
+export function getFrontWindow(): WindowInfo {
+  if (process.platform !== "darwin") {
+    return { windowId: 0, app: "", title: "", url: "" };
+  }
+  try {
+    const bin = ensureFrontwindowBin();
+    if (!bin) throw new Error("no frontwindow binary");
+    const out = execFileSync(bin, { encoding: "utf-8", timeout: 2000 }).trim();
+    const [idStr, app, ...titleParts] = out.split("|");
+    const windowId = parseInt(idStr ?? "0", 10);
+    const title = titleParts.join("|");
+    return { windowId, app: app ?? "", title: title ?? "", url: "" };
+  } catch {
+    try {
+      const app = execFileSync("osascript", ["-e",
+        'tell application "System Events" to name of first application process whose frontmost is true',
+      ], { encoding: "utf-8", timeout: 3000 }).trim();
+      return { windowId: 0, app, title: "", url: "" };
+    } catch {
+      return { windowId: 0, app: "", title: "", url: "" };
+    }
+  }
+}
+
+export async function writeWindowInfo(pngPath: string, info: WindowInfo): Promise<void> {
+  const jsonPath = pngPath.replace(/\.png$/, ".json");
+  await writeFile(jsonPath, JSON.stringify(info), "utf-8");
+}
+
+export async function readWindowInfo(pngPath: string): Promise<WindowInfo | null> {
+  try {
+    const jsonPath = pngPath.replace(/\.png$/, ".json");
+    const data = await readFile(jsonPath, "utf-8");
+    return JSON.parse(data);
+  } catch {
+    return null;
+  }
 }
 
 // ── Capture ──
@@ -17,16 +100,19 @@ export interface Screenshot {
 /**
  * Take a screenshot and save as full-resolution PNG to the inbox.
  */
-export async function takeScreenshot(inboxDir: string): Promise<string> {
-  await mkdir(inboxDir, { recursive: true });
+export async function takeScreenshot(dir: string, windowId?: number): Promise<string> {
+  await mkdir(dir, { recursive: true });
 
   const ts = Date.now();
-  const filepath = join(inboxDir, `screenshot-${ts}.png`);
-  const tmpPng = join(inboxDir, `tmp_capture_${ts}.png`);
+  const filepath = join(dir, `screenshot-${ts}.png`);
+  const tmpPng = join(dir, `tmp_capture_${ts}.png`);
 
   await new Promise<void>((resolve, reject) => {
     if (process.platform === "darwin") {
-      execFile("screencapture", ["-x", "-m", tmpPng], (err) => {
+      const args = windowId
+        ? ["-x", "-o", "-l", String(windowId), tmpPng]
+        : ["-x", "-m", tmpPng];
+      execFile("screencapture", args, (err) => {
         if (err) reject(new Error(`screencapture failed: ${err.message}`));
         else resolve();
       });

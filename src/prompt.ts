@@ -217,7 +217,7 @@ export function buildPromptBlocks(screenshots: Screenshot[]): Array<
   for (const screenshot of screenshots) {
     blocks.push({
       type: "text" as const,
-      text: `\n[${screenshot.timestamp.toLocaleTimeString()}]`,
+      text: `\n[${screenshot.timestamp.toLocaleTimeString()}]${screenshot.windowInfo ? ` ${screenshot.windowInfo.app}${screenshot.windowInfo.title ? ` — ${screenshot.windowInfo.title}` : ""}` : ""}`,
     });
     blocks.push({
       type: "image" as const,
