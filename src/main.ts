@@ -192,7 +192,7 @@ async function agentLoop(config: Config, agent: AgentHandle, signal: AbortSignal
 
       if (pngs.length < config.batchSize) {
         // Not enough screenshots yet — try linting if idle
-        // await tryLint(config, agent); // disabled for now
+        await tryLint(config, agent);
         await sleep(3000);
         continue;
       }
